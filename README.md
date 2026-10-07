@@ -4,8 +4,9 @@ A primary flight display for your phone while you fly in Microsoft Flight Simula
 
 A Python bridge on the PC reads live flight data from the sim and serves a web app you add to your iPhone home screen. It shows a canvas-drawn PFD, flight data, autopilot mode annunciations, and your SimBrief route with the active waypoint.
 
-<!-- Add a screenshot of the app running on your phone here -->
-<!-- ![PFD Companion on iPhone](assets/screenshot.png) -->
+![PFD Companion Home, PFD and Route screens](assets/screenshot.png)
+
+*Home, PFD and Route screens, shown with the app's built-in demo flight (open `pfd.html` directly in a browser to see it).*
 
 ## How it works
 
