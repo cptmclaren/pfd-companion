@@ -1,0 +1,1988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>PFD Companion</title>
+<!-- iOS "Add to Home Screen" standalone mode: hides Safari's URL bar/toolbar
+     when launched from the home-screen icon. Has no effect in a normal tab. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PFD">
+<meta name="theme-color" content="#100e1e">
+<meta name="color-scheme" content="dark">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/tabler-icons.min.css">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+/* Visible keyboard focus on every interactive element — touch/tap already
+   has its own press feedback (scale/color), this is specifically for
+   keyboard and switch-control navigation, which had no indicator at all. */
+[onclick]:focus-visible, [tabindex]:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
+
+:root {
+  /* "Cinema Glass" direction: deep gradient (never flat #000 — avoids OLED
+     smear and gives the ambient glow something to sit on), frosted-glass
+     cards, one indigo accent for UI chrome. EFIS colors below are functional
+     data only (aircraft state) — never used decoratively, same rule as the
+     old flat-black scheme. */
+  --bg-top:   #100e1e;
+  --bg-bot:   #0c0a17;
+  --s1:       #1c1c1e;
+  --s2:       #2c2c2e;
+  --s3:       #3a3a3c;
+  --sep:      rgba(255,255,255,0.08);
+  --text:     #ffffff;
+  --text2:    #ebebf5cc;
+  --text3:    #ebebf599;
+  --text4:    #636366;
+  --blue:     #0a84ff;
+  --green:    #34c759;
+  --amber:    #ff9f0a;
+  --red:      #ff453a;
+  --magenta:  #bf5af2;
+
+  /* UI accent — American Airlines blue, sampled directly from the actual
+     logo file (Group 1.png: #02A6DF cyan top / #154D8D navy bottom of the
+     tail gradient), not a guessed brand hex. Originally chosen to be
+     distinct from EFIS blue (#0a84ff, functional-data-only elsewhere in
+     this file) — this cyan-leaning value keeps some separation, but it's
+     closer to EFIS blue than the old indigo was, worth watching for. */
+  --accent:      #0d7dc4;
+  --accent-glow: rgba(13,125,196,0.4);
+
+  /* Glass surfaces: translucent fill + hairline border + blur, replacing the
+     old flat --s1 card fill. Elevation reads via glow/blur here, not via a
+     brighter border step (shadows still barely register on near-black). */
+  --glass-fill:      rgba(255,255,255,0.045);
+  --glass-fill-soft: rgba(255,255,255,0.035);
+  --glass-border:    rgba(255,255,255,0.09);
+  --glass-border-2:  rgba(255,255,255,0.1);
+
+  /* Motion: one shared timing scale so every transition in the app moves at
+     the same rhythm instead of a scatter of similar-but-different values. */
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Touch: minimum interactive hit area (Apple HIG / Material both land on
+     ~44px) — applied via min-height/min-width rather than baked into each
+     component's padding, so it stays a single source of truth. */
+  --tap-min: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+html, body {
+  /* height:100% alone can fall short of the true full-screen height in iOS
+     standalone mode (the safe-area/notch region isn't reliably included in
+     the "100%" initial containing block the way it is for 100dvh) — #app
+     below already uses this same 100%-then-dvh-override pattern; html/body
+     didn't, which could leave a sliver at the very top/bottom where nothing
+     is painted and the system default (black) shows through instead of this
+     gradient. */
+  /* min-height (not height) and deliberately taller than the measured
+     viewport: iOS 26's own dvh/safe-area measurement has documented bugs
+     where it doesn't quite reach the true screen edge (visible as a seam
+     where the flat background-color fallback below shows through, unmatched
+     to the gradient tail right above it). Overscanning by 40px costs nothing
+     since overflow:hidden clips it — it just guarantees no exposed gap
+     regardless of exactly how iOS mismeasures the viewport. */
+  width: 100%; min-height: 100%; min-height: calc(100dvh + 40px);
+  /* Safari 26 ("Liquid Glass") tints its own chrome (status bar / home
+     indicator area) by sampling background-color, not a background image —
+     a gradient-only background (below) gives it nothing to read, so it
+     falls back to its own default and paints solid black there instead of
+     bleeding this page's actual color through. The explicit solid color
+     here is what that sampling picks up; the gradient still paints over it
+     for everything actually inside the viewport. */
+  background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bot) 100%);
+  background-color: var(--bg-top);
+  overflow: hidden;
+  font-family: -apple-system, 'SF Pro Text', 'SF Pro Display', sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── App shell ── */
+#app { display: flex; flex-direction: column; height: 100%; height: 100dvh; }
+/* Soft reveal on launch instead of an instant snap-in — the backdrop
+   (html/body) is already the right color the instant the page paints, so
+   only the content itself needs to settle in. Re-triggers naturally when
+   .login-screen flips from display:none to flex, so a session-expired
+   lock screen gets the same gentle entrance as the initial launch. */
+@keyframes app-reveal { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+#app, .login-screen { animation: app-reveal 380ms var(--ease-out) both; }
+
+/* ── Screens ── */
+/* overflow:clip (not just hidden) — the off-screen absolutely-positioned
+   siblings still register as scrollable overflow content under `hidden`,
+   which a stray scrollIntoView (browser click handling, focus, etc.) can
+   silently scroll away from (0,0), corrupting the whole layout. `clip`
+   removes the scroll container entirely so that's not possible; `hidden` is
+   listed first so browsers without `clip` support (pre-2023) still clip
+   instead of showing unclipped overflow. */
+#screens { position: relative; flex: 1; overflow: hidden; overflow: clip; }
+.screen {
+  display: flex; flex-direction: column;
+  position: absolute; inset: 0; overflow: hidden;
+  transform: translateX(100%); opacity: 0; pointer-events: none;
+  transition: transform var(--dur-slow) var(--ease-out), opacity var(--dur-slow) var(--ease-out);
+}
+.screen.active { transform: translateX(0); opacity: 1; pointer-events: all; }
+.screen.prev   { transform: translateX(-100%); opacity: 0; }
+.screen.next   { transform: translateX(100%); opacity: 0; }
+
+/* ── Nav bar (minimal status strip — no page title; the tab bar labels
+   already say which screen you're on, and Flighty-style chrome stays out
+   of the way of the data) ── */
+.nav {
+  padding: env(safe-area-inset-top, 14px) 16px 0;
+  padding-top: max(env(safe-area-inset-top), 14px);
+  flex-shrink: 0;
+}
+.nav-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0 6px;
+}
+/* .nav-badge: same class JS already toggles (homeBadge.className = 'nav-badge '
+   + badgeCls) — restyled from a flat status chip into the glass "LIVE" pill,
+   with a pulsing dot via ::before so no JS/markup change was needed to add it. */
+.nav-badge {
+  display: inline-flex; align-items: center;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 5px 10px 5px 8px; border-radius: 100px;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+  backdrop-filter: blur(12px); color: var(--green);
+}
+.nav-badge::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px;
+  background: currentColor; box-shadow: 0 0 8px currentColor;
+}
+.nav-badge:not(.disconnected):not(.waiting):not(.paused)::before { animation: livePulse 1.8s ease-in-out infinite; }
+@keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.nav-badge.disconnected { color: var(--red); }
+.nav-badge.waiting      { color: var(--amber); }
+.nav-badge.paused       { color: var(--blue); }
+.nav-fixes {
+  font-size: 11px; font-weight: 600; color: var(--text3); font-variant-numeric: tabular-nums;
+}
+/* Height matched to .nav-badge's own visual weight (10.5px text + 5px
+   padding) so the two align as a pair; width follows the source image's
+   own aspect ratio. */
+.nav-logo { height: 20px; width: auto; display: block; }
+
+/* ── Login screen ── */
+.login-screen {
+  display: none; position: fixed; inset: 0; z-index: 500;
+  align-items: center; justify-content: center; padding: 24px;
+  background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bot) 100%);
+}
+.login-card { width: 100%; max-width: 320px; padding: 28px 22px; text-align: center; }
+.login-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.login-sub { font-size: 13px; color: var(--text3); margin-bottom: 20px; }
+.login-input {
+  width: 100%; background: var(--glass-fill); border: 1px solid var(--glass-border);
+  border-radius: 10px; padding: 12px 14px; color: var(--text); font-size: 16px;
+  text-align: center; margin-bottom: 12px;
+}
+.login-input::placeholder { color: var(--text4); }
+.login-btn {
+  width: 100%; min-height: var(--tap-min); border-radius: 10px; font-size: 15px; font-weight: 600;
+  cursor: pointer; background: var(--accent); color: #fff; border: none;
+  transition: transform var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+.login-btn:active { transform: scale(0.97); }
+.login-btn:disabled { opacity: 0.6; }
+.login-error { font-size: 12.5px; color: var(--red); min-height: 16px; margin-top: 12px; }
+.login-logout-all { font-size: 12px; color: var(--text4); margin-top: 14px; cursor: pointer; text-decoration: underline; }
+
+/* ── Auto-pause: a labeled block, not a second tab bar. Segmented pill picks
+   which mode's detail panel is open (local UI state — see expandedRow in JS);
+   the small dot inside the selected segment's label is the separate, real
+   "armed on the server" signal (d.pause_armed/pause_mode), so the two never
+   get confused with each other. ── */
+.pause-label {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+  color: rgba(255,255,255,0.38); margin: 0 2px 8px;
+}
+.pause-status { font-size: 11.5px; font-weight: 500; color: var(--text3); margin-top: 8px; padding: 0 2px; transition: color var(--dur-base) var(--ease-out); }
+.pause-seg {
+  display: flex; background: var(--glass-fill); border: 1px solid var(--glass-border);
+  border-radius: 14px; padding: 3px;
+}
+.pause-row {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  flex: 1; min-height: 38px; padding: 0 4px; border-radius: 11px; cursor: pointer;
+  transition: background var(--dur-base) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.pause-row:active { transform: scale(0.97); }
+.pause-row.selected { background: var(--accent-glow); }
+.pause-row-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--s3); flex-shrink: 0;
+  transition: background var(--dur-slow) var(--ease-out), transform var(--dur-slow) var(--ease-spring);
+}
+.pause-row-dot.armed { background: var(--green); box-shadow: 0 0 6px var(--green); transform: scale(1.3); }
+.pause-row-label { font-size: 12px; font-weight: 600; color: var(--text2); transition: color var(--dur-base) var(--ease-out); }
+.pause-row.selected .pause-row-label { color: #fff; }
+/* max-height with a generous fixed cap, not the grid-rows 0fr/1fr trick —
+   that needed the <input> to shrink below its native intrinsic height, which
+   browsers won't do, so the "collapsed" track never actually reached 0 (it
+   measured ~12px) and the content rendered compressed/overlapping instead of
+   hidden. max-height doesn't care about content minimums at all. */
+/* No transition here (verified against a live copy, not assumed): a
+   max-height animation on a container that includes a real <input> element
+   reproducibly gets stuck at max-height:0 in this browser regardless of the
+   target value (tried an exact scrollHeight-measured cap too, not just the
+   fixed 140px below) — forcing a reflow first didn't help either; only
+   disabling the transition did. Snapping open/closed instantly avoids the
+   whole class of quirk rather than chasing it further. */
+.pause-row-body-wrap {
+  max-height: 0; overflow: hidden;
+}
+.pause-row-body-wrap.open { max-height: 140px; margin-top: 10px; }
+/* The reveal animation lives here instead, on opacity/transform of the
+   inner content — never on max-height itself (see the no-transition note
+   above). These don't touch layout size, so the <input> intrinsic-height
+   quirk that broke a max-height transition doesn't apply to them. */
+.pause-hint, .pause-row-body {
+  opacity: 0; transform: translateY(-6px);
+  transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
+}
+.pause-row-body-wrap.open .pause-hint,
+.pause-row-body-wrap.open .pause-row-body {
+  opacity: 1; transform: translateY(0);
+}
+.pause-hint { font-size: 11.5px; color: var(--text4); padding: 0 2px 8px; }
+.pause-row-body {
+  display: flex; gap: 8px; align-items: center; padding: 0 2px 4px;
+}
+.pause-input {
+  flex: 1; min-width: 0; background: var(--glass-fill); border: 1px solid var(--glass-border);
+  border-radius: 10px; padding: 10px 12px; color: var(--text); font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.pause-input::placeholder { color: var(--text4); }
+.pause-tod-est { flex: 1; font-size: 13px; color: var(--text3); }
+.pause-btn.arm {
+  min-height: var(--tap-min); padding: 0 16px; border-radius: 10px; font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center;
+  cursor: pointer; background: var(--accent); color: #fff; white-space: nowrap;
+  transition: transform var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+.pause-btn.arm:active { transform: scale(0.94); opacity: 0.85; }
+#pause-now-row {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: var(--tap-min); cursor: pointer; font-size: 14px; font-weight: 600; padding: 14px;
+  background: rgba(52,199,89,0.16); border: 1px solid rgba(52,199,89,0.3); color: var(--green);
+  transition: transform var(--dur-fast) var(--ease-out), background var(--dur-slow) var(--ease-out),
+              border-color var(--dur-slow) var(--ease-out), color var(--dur-slow) var(--ease-out);
+}
+#pause-now-row:active { transform: scale(0.97); }
+#pause-now-row.paused { background: rgba(255,69,58,0.16); border-color: rgba(255,69,58,0.3); color: var(--red); }
+#pause-now-row.disabled {
+  background: var(--glass-fill); border-color: var(--glass-border); color: var(--text4);
+  cursor: default; pointer-events: none;
+}
+#pause-now-row.disabled:active { transform: none; }
+/* Brief opacity dip while the icon/text swap underneath, so the state change
+   reads as a crossfade rather than an instant jump — see togglePause()/updateUI(). */
+#pause-now-row.swap > * { transition: opacity var(--dur-fast) var(--ease-out); opacity: 0; }
+
+/* ── Scroll area ── */
+.scroll {
+  flex: 1; overflow-y: auto; padding: 8px 16px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Cards: frosted glass — translucent fill + hairline border + blur,
+   replacing the old flat --s1 fill. Elevation now reads via glow/blur
+   rather than a brighter border step. ── */
+.card {
+  background: var(--glass-fill); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(18px); border-radius: 16px; margin-bottom: 10px; overflow: hidden;
+  position: relative;
+}
+.card-pad { padding: 14px 16px; }
+.section-label {
+  font-size: 10.5px; font-weight: 700; color: rgba(255,255,255,0.4);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  margin: 16px 2px 8px;
+}
+
+/* ── Route card: KDFW ✈ KSFO with a connecting arc + plane glyph (SVG, drawn
+   pointing along the line rather than relying on a font glyph's default
+   angle), plus a Zulu/local ETA line beneath the distance-to-go. ── */
+#home-route-card.card-pad { padding: 12px 16px; }
+.route-airports { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.route-icao { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
+.route-arc { flex: 1; height: 1px; background: linear-gradient(90deg, rgba(255,255,255,0.28), var(--accent-glow) 46%, rgba(255,255,255,0.1)); position: relative; max-width: 60px; }
+.route-arc-plane {
+  /* This icon (a solid-white PNG on transparent) already points right by
+     design — no rotation needed, unlike the previous inline-SVG version. */
+  position: absolute; left: 46%; top: 50%; transform: translate(-50%,-50%);
+  width: 13px; height: auto; filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+/* Flag emoji sits inline at the same font-size as the registration text
+   next to it, so it's naturally the same height with no separate sizing
+   rule needed. */
+.route-identity {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--text3);
+  font-variant-numeric: tabular-nums; margin: 3px 0 0;
+}
+.route-actype { color: var(--text4); font-weight: 500; }
+.route-sub { font-size: 13px; color: var(--text3); font-weight: 600; }
+.route-eta { font-size: 12px; color: var(--text4); font-variant-numeric: tabular-nums; margin-top: 4px; }
+.route-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.pill {
+  font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px;
+}
+.pill-green  { background: rgba(52,199,89,0.15);  color: var(--green); }
+.pill-blue   { background: rgba(10,132,255,0.15); color: var(--blue); }
+.pill-amber  { background: rgba(255,159,10,0.15); color: var(--amber); }
+.pill-red    { background: rgba(255,69,58,0.15);  color: var(--red); }
+
+/* ── Altitude hero ── */
+.hero {
+  /* flex-shrink: 0 is load-bearing, not decorative: this card has
+     overflow:hidden (clips the glow to its rounded corners), and a flex item
+     with overflow other than visible resolves its automatic min-height to 0
+     instead of its content size — meaning if a parent column is ever short
+     on space, THIS is the item flexbox would crush first, silently slicing
+     the altitude digits in half rather than shrinking whitespace elsewhere.
+     .scroll is normally tall enough that it doesn't matter, but pin it
+     anyway since the failure mode (a sliced-through number) is bad enough to
+     guard against for free. */
+  text-align: center; overflow: hidden; flex-shrink: 0;
+  padding: 18px 18px 18px;
+}
+.hero::before {
+  content: ''; position: absolute; inset: -40% -20% auto -20%; height: 120px;
+  background: radial-gradient(ellipse, var(--accent-glow), transparent 70%); pointer-events: none;
+}
+.hero-lbl { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; color: rgba(255,255,255,0.4); text-transform: uppercase; position: relative; }
+/* Plain centered text flow, not flex+gap — "FL" and the number need to read
+   as one continuous string (FL340, tightly kerned, centered as a unit),
+   not two separately-spaced elements. */
+.hero-val {
+  text-align: center;
+  font-family: 'B612 Mono', ui-monospace, 'SF Mono', monospace; font-size: 50px; font-weight: 600;
+  letter-spacing: -0.02em; line-height: 1; margin-top: 6px; position: relative;
+  background: linear-gradient(180deg, #ffffff, #bfe6f8); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+/* Same size/weight as the digits (not a small caption unit) — just a low-
+   opacity "ghost" fill so FL reads as part of the number, not a label.
+   Plain alpha on -webkit-text-fill-color looked identical to the digits
+   (checked against a live render, not assumed): the parent's gradient is
+   background-clip:text'd across ALL text in the box, including this span,
+   so a translucent *white* fill just blends back into an already-bright
+   gradient with barely any visible dimming. CSS opacity forces a real
+   compositing pass against what's actually behind the glyph (the card's
+   dark glass), which reads as a clear ghost instead. */
+.hero-val .alt-fl { -webkit-text-fill-color: #fff; opacity: 0.22; }
+/* Each digit gets its own fixed-size, clipped window so the old/new digit
+   can slide vertically past each other without spilling into neighbors —
+   monospace font means every slot is the same width, so no per-character
+   measuring is needed. */
+.alt-slot {
+  display: inline-block; position: relative; overflow: hidden;
+  height: 1em; line-height: 1; vertical-align: top;
+  /* Fixed width, not sized from content: children below are position:absolute
+     (taken out of flow, contribute nothing to the slot's own size), and
+     without this the slot would collapse to zero width. 1ch is exactly the
+     width of one glyph in a monospace font — no measuring needed. Also what
+     fixed the old/new digit visibly pushing the rest of the number sideways
+     while both were briefly present mid-swap: they were plain inline-block
+     siblings taking up real layout space side by side instead of stacking
+     on top of each other. */
+  width: 1ch;
+  perspective: 180px; /* gives the rotateX roll below an actual vanishing point to rotate through */
+}
+/* .hero-val's gradient-clip (background-clip:text) doesn't reach across an
+   inline-block descendant's own box in WebKit — this slot's digit inherited
+   -webkit-text-fill-color:transparent from the parent with nothing behind
+   it to show through, rendering fully invisible (confirmed live: the FL
+   ghost prefix stayed visible since it already had its own explicit color,
+   the digits didn't). Re-declaring the same gradient here, scoped to each
+   slot's own box, fixes it — a 180deg gradient over a ~1-line-height box
+   looks identical whether it's painted once across the whole line or once
+   per narrow slot. */
+.alt-slot > span {
+  position: absolute; inset: 0; display: inline-block; text-align: center;
+  backface-visibility: hidden;
+  background: linear-gradient(180deg, #ffffff, #bfe6f8); -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+
+/* ── Stats grid: 5 items (IAS/GS/HDG/Mach/V-S) is an odd count — a fixed
+   3-column grid (not a scrolling row) gives row 1 all 3 and row 2 the
+   remaining 2, left-aligned, so everything's visible on load with no
+   gesture needed and no chip left perpetually half-offscreen. ── */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 7px; margin-bottom: 10px; }
+.stat {
+  background: var(--glass-fill); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(14px); border-radius: 14px; padding: 8px 10px; min-width: 0;
+}
+.stat-label { font-size: 9px; font-weight: 700; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 3px; }
+.stat-val { font-family: 'B612 Mono', ui-monospace, monospace; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.stat-unit { font-size: 10px; font-weight: 500; color: var(--text4); }
+
+/* ── Next-waypoint fill chip: starts fully filled, drains toward empty as
+   wp_distance closes in on the distance it had when this became the active
+   leg, empties right as it's crossed, then snaps back full for the next leg
+   — see legStartDist in JS. ── */
+.fill-chip { position: relative; overflow: hidden; }
+.fill-chip .fill {
+  position: absolute; inset: 0; transform-origin: left; transform: scaleX(1);
+  background: linear-gradient(90deg, rgba(2,166,223,0.5), rgba(13,125,196,0.2));
+  transition: transform var(--dur-slow) linear;
+}
+.fill-chip .stat-content { position: relative; z-index: 1; }
+
+/* ── CDI card ── */
+.cdi-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.cdi-title { font-size: 10.5px; font-weight: 700; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.08em; }
+.cdi-status { font-size: 12.5px; font-weight: 600; }
+.cdi-track { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; position: relative; margin-bottom: 10px; }
+.cdi-center { position: absolute; left: 50%; top: -5px; bottom: -5px; width: 1.5px; background: rgba(255,255,255,0.18); transform: translateX(-50%); }
+.cdi-dot { position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%; transform: translate(-50%,-50%); transition: left var(--dur-slow) var(--ease-out), background var(--dur-slow) var(--ease-out); }
+.cdi-val { font-size: 14px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* ── Desktop: keep the PFD screen at a sane, centered width instead of
+   stretching edge-to-edge on a wide window. No-op on phone widths (< 440px),
+   since the max-width never actually constrains anything there. Scoped to
+   #screen-pfd only — Home/Route are unaffected. */
+#screen-pfd .nav,
+#screen-pfd .scroll {
+  align-self: center;
+  width: 100%;
+  max-width: 440px;
+}
+
+/* ── PFD canvas card: padding lives on the existing .card-pad wrapper, not
+   on .pfd-wrap itself — resizePFD() reads wrap.clientWidth as the canvas's
+   internal pixel width, so adding padding directly to .pfd-wrap would make
+   that measurement (and canvas.width) include space the canvas doesn't
+   actually occupy on screen, softening/misaligning every draw call that
+   assumes 1 canvas px == 1 CSS px. Only the outer card gets the glass frame. ── */
+.pfd-wrap {
+  width: 100%; background: #111; border-radius: 10px; overflow: hidden;
+  position: relative; touch-action: none;
+}
+.pfd-canvas-el { display: block; width: 100%; height: auto; image-rendering: crisp-edges; }
+
+/* ── Waypoint list: connected dot-timeline (Flighty's flight-timeline
+   motif) — a ::before line down the left edge instead of a flat divided
+   list, and passed waypoints collapse away (see wpt-row-collapsing) rather
+   than just graying out and staying forever. ── */
+.wpt-row {
+  display: flex; align-items: center; padding: 11px 16px; position: relative;
+  max-height: 70px; opacity: 1; transform: scale(1) translateX(0); transform-origin: right center;
+  transition: max-height 460ms cubic-bezier(0.4,0,0.2,1), opacity 340ms cubic-bezier(0.4,0,0.2,1),
+              padding 460ms cubic-bezier(0.4,0,0.2,1), transform 460ms cubic-bezier(0.4,0,0.2,1);
+  overflow: hidden;
+}
+.wpt-row::before {
+  content: ''; position: absolute; left: 20.5px; top: -1px; bottom: -1px; width: 1.5px;
+  background: rgba(255,255,255,0.12);
+}
+.wpt-row:first-child::before { top: 50%; }
+.wpt-row:last-child::before { bottom: 50%; }
+/* Fired the moment a waypoint is sequenced past — flashes to the "past"
+   dot/ident color (see JS) then shrinks + drifts away, pushing the rows
+   below up into its place via normal document flow (no separate "push"
+   animation needed — collapsing this row's height does that for free). */
+.wpt-row.wpt-row-collapsing { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; transform: scale(0.94) translateX(10px); }
+.wpt-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.15);
+  margin-right: 12px; flex-shrink: 0; position: relative; z-index: 1;
+  transition: background var(--dur-slow) var(--ease-out), box-shadow var(--dur-slow) var(--ease-out);
+}
+.wpt-dot.active { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow); }
+.wpt-dot.past   { background: rgba(52,199,89,0.5); animation: dotPop 420ms cubic-bezier(0.34,1.56,0.64,1); }
+.wpt-dot.dest   { background: var(--green); }
+@keyframes dotPop { 0% { transform: scale(1); } 45% { transform: scale(1.55); } 100% { transform: scale(1); } }
+.wpt-ident { font-size: 15px; font-weight: 700; font-family: 'B612 Mono', 'Courier New', monospace; flex: 1; transition: color var(--dur-base) var(--ease-out); }
+.wpt-ident.past   { color: var(--text4); font-weight: 500; }
+.wpt-ident.active { color: #fff; }
+.wpt-ident.dest   { color: var(--green); }
+.wpt-dist { font-size: 12.5px; color: var(--text3); margin-right: 10px; font-variant-numeric: tabular-nums; text-align: right; }
+.wpt-eta  { font-size: 12.5px; color: var(--text3); font-variant-numeric: tabular-nums; font-family: 'B612 Mono', 'Courier New', monospace; min-width: 44px; text-align: right; }
+.wpt-eta .wpt-local { display: block; font-size: 10.5px; color: var(--text4); }
+.wpt-eta.active { color: #fff; }
+.wpt-eta.past   { color: var(--text4); }
+.wpt-eta.dest   { color: var(--green); }
+.wpt-active-row { background: rgba(109,118,245,0.08); }
+
+/* ── Tab bar: floating glass capsule with a sliding pill, not an edge-to-
+   edge opaque bar — matches the rest of the app's glass-card language.
+   .tab already had flex:1 (equal width), so the pill's width/position is
+   pure CSS calc() against --i (no JS box measurement, no font-load race). ── */
+#tab-bar {
+  display: flex; justify-content: space-around; padding: 6px;
+  margin: 0 18px max(env(safe-area-inset-bottom), 14px);
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 20px; backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  flex-shrink: 0; position: relative;
+}
+/* left/right (not width+transform) so the two edges can animate on
+   independent schedules — see the .dir-right/.dir-left stagger below. */
+.tab-pill {
+  position: absolute; top: 6px; bottom: 6px; border-radius: 14px;
+  left: calc(6px + var(--i, 0) * ((100% - 12px) / 3));
+  right: calc(6px + (2 - var(--i, 0)) * ((100% - 12px) / 3));
+  background: linear-gradient(155deg, rgba(2,166,223,0.55), rgba(13,125,196,0.30));
+  border: 1px solid rgba(60,190,230,0.55);
+  box-shadow: 0 0 18px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.15);
+  transition: left 260ms cubic-bezier(0.25,0.1,0.25,1), right 260ms cubic-bezier(0.25,0.1,0.25,1);
+  z-index: 0;
+}
+/* Moving right (e.g. Home → PFD): the right edge is leading, so it moves
+   immediately; the left edge is trailing, so it holds for 90ms first —
+   during that window the pill has visibly stretched open before the left
+   edge catches up and closes it back to normal width. Moving left is the
+   mirror image. */
+#tab-bar.dir-right .tab-pill { transition: left 260ms cubic-bezier(0.25,0.1,0.25,1) 90ms, right 210ms cubic-bezier(0.25,0.1,0.25,1); }
+#tab-bar.dir-left  .tab-pill { transition: right 260ms cubic-bezier(0.25,0.1,0.25,1) 90ms, left 210ms cubic-bezier(0.25,0.1,0.25,1); }
+.tab {
+  display: flex; align-items: center; justify-content: center;
+  flex: 1; min-height: var(--tap-min); cursor: pointer; position: relative; z-index: 1;
+}
+.tab svg { width: 24px; height: 24px; color: rgba(255,255,255,0.45); transition: color var(--dur-base) var(--ease-out); }
+.tab.active svg { color: #fff; }
+
+</style>
+</head>
+<body>
+<div id="login-screen" class="login-screen">
+  <form class="card login-card" onsubmit="event.preventDefault(); submitLogin();">
+    <div class="login-title">PFD Companion</div>
+    <div class="login-sub">Enter password to continue</div>
+    <input type="password" id="login-password" class="login-input" placeholder="Password" autocomplete="current-password">
+    <button type="submit" id="login-submit" class="login-btn">Unlock</button>
+    <div class="login-error" id="login-error"></div>
+    <div class="login-logout-all" onclick="logoutAllDevices()">Log out all devices instead</div>
+  </form>
+</div>
+<div id="app">
+<div id="screens">
+
+  <!-- HOME -->
+  <div class="screen active" id="screen-home">
+    <div class="nav">
+      <div class="nav-inner">
+        <img src="/logo.png" class="nav-logo" alt="" onerror="this.style.display='none'">
+        <div class="nav-badge disconnected" id="home-badge">Connecting</div>
+      </div>
+    </div>
+    <div class="scroll">
+      <div class="card card-pad" id="home-route-card">
+        <div class="route-airports">
+          <span class="route-icao" id="h-origin">----</span>
+          <div class="route-arc"><img class="route-arc-plane" src="/plane-icon.png" alt="" width="238" height="228"></div>
+          <span class="route-icao" id="h-dest">----</span>
+        </div>
+        <div class="route-identity" id="h-identity" style="display:none;">
+          <span id="h-flag"></span><span id="h-reg"></span><span class="route-actype" id="h-actype"></span>
+        </div>
+        <div class="route-sub" id="h-sub">No flight plan loaded</div>
+        <div class="route-eta" id="h-eta"></div>
+        <div class="route-pills" id="h-pills"></div>
+      </div>
+
+      <div class="card hero" id="h-alt-card">
+        <div class="hero-lbl">Altitude</div>
+        <div class="hero-val" id="h-alt">0</div>
+      </div>
+
+      <div class="section-label">Telemetry</div>
+      <div class="stats-grid">
+        <div class="stat"><div class="stat-label">IAS</div><div class="stat-val" id="h-ias">0<span class="stat-unit">kt</span></div></div>
+        <div class="stat"><div class="stat-label">GS</div><div class="stat-val" id="h-gs">0<span class="stat-unit">kt</span></div></div>
+        <div class="stat"><div class="stat-label">HDG</div><div class="stat-val" id="h-hdg">---<span class="stat-unit">°</span></div></div>
+        <div class="stat"><div class="stat-label">Mach</div><div class="stat-val" id="h-mach">.000</div></div>
+        <div class="stat"><div class="stat-label">V/S</div><div class="stat-val" id="h-vs" style="color:var(--text)">0</div></div>
+      </div>
+
+      <div class="section-label">Navigation</div>
+      <div class="card card-pad">
+        <div class="cdi-top">
+          <span class="cdi-title">Track deviation</span>
+          <span class="cdi-status" id="h-cdi-status" style="color:var(--text4)">No data</span>
+        </div>
+        <div class="cdi-track">
+          <div class="cdi-center"></div>
+          <div class="cdi-dot" id="h-cdi-dot" style="left:50%;background:var(--text4)"></div>
+        </div>
+        <div class="cdi-val" id="h-cdi-val" style="color:var(--text4)">---</div>
+      </div>
+
+      <div class="section-label">Next Waypoint</div>
+      <div class="card card-pad" style="display:flex;align-items:center;justify-content:space-between;">
+        <span class="stat-val" id="h-wpt" style="font-size:16px;color:#fff;">-----</span>
+        <span style="text-align:right;font-family:'B612 Mono',monospace;font-size:12px;color:var(--text3);line-height:1.5;">
+          <span id="h-dist">--nm</span><br><span id="h-ete">--:--</span>
+        </span>
+      </div>
+
+      <div class="pause-label">Auto-Pause</div>
+      <div class="pause-seg" id="pause-card">
+        <div class="pause-row" data-mode="off" onclick="selectPauseRow('off')" role="button" tabindex="0" aria-label="Turn auto-pause off">
+          <span class="pause-row-dot"></span>
+          <span class="pause-row-label">Off</span>
+        </div>
+        <div class="pause-row" data-mode="distance" onclick="selectPauseRow('distance')" role="button" tabindex="0" aria-label="Auto-pause by distance from destination">
+          <span class="pause-row-dot"></span>
+          <span class="pause-row-label">Distance</span>
+        </div>
+        <div class="pause-row" data-mode="tod" onclick="selectPauseRow('tod')" role="button" tabindex="0" aria-label="Auto-pause at estimated top of descent">
+          <span class="pause-row-dot"></span>
+          <span class="pause-row-label">TOD</span>
+        </div>
+        <div class="pause-row" data-mode="time" onclick="selectPauseRow('time')" role="button" tabindex="0" aria-label="Auto-pause at a Zulu time">
+          <span class="pause-row-dot"></span>
+          <span class="pause-row-label">Time</span>
+        </div>
+      </div>
+      <div class="pause-row-body-wrap" id="pause-distance-wrap">
+        <div class="pause-hint" id="pause-distance-hint">currently -- nm from destination</div>
+        <div class="pause-row-body">
+          <input type="number" inputmode="decimal" class="pause-input" id="pause-distance-input" placeholder="nm from destination" aria-label="Distance in nautical miles from destination">
+          <div class="pause-btn arm" onclick="armDistance()" role="button" tabindex="0">Arm</div>
+        </div>
+      </div>
+      <div class="pause-row-body-wrap" id="pause-tod-wrap">
+        <div class="pause-row-body">
+          <div class="pause-tod-est" id="pause-tod-estimate">~-- nm out</div>
+          <div class="pause-btn arm" onclick="armTod()" role="button" tabindex="0">Arm</div>
+        </div>
+      </div>
+      <div class="pause-row-body-wrap" id="pause-time-wrap">
+        <div class="pause-hint" id="pause-time-hint">enter a 24h Zulu time</div>
+        <div class="pause-row-body">
+          <input type="text" inputmode="numeric" maxlength="5" placeholder="HH:MM" pattern="^([01][0-9]|2[0-3]):[0-5][0-9]$" class="pause-input" id="pause-time-input" aria-label="24-hour Zulu time to auto-pause at, e.g. 14:30" oninput="maskTimeInput(this)">
+          <div class="pause-btn arm" onclick="armTime()" role="button" tabindex="0">Arm</div>
+        </div>
+      </div>
+      <div class="pause-status" id="pause-status">Auto-pause: off</div>
+
+      <div class="card card-pad" id="pause-now-row" onclick="togglePause()" role="button" tabindex="0" aria-label="Sim in session, tap to pause" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;">
+        <i class="ti ti-player-pause-filled"></i>
+        <span>Sim in session — tap to pause</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- PFD -->
+  <div class="screen" id="screen-pfd">
+    <div class="nav">
+      <div class="nav-inner">
+        <img src="/logo.png" class="nav-logo" alt="" onerror="this.style.display='none'">
+        <div class="nav-badge disconnected" id="pfd-badge">Connecting</div>
+      </div>
+    </div>
+    <div class="scroll">
+      <div class="card card-pad">
+        <div class="section-label" style="margin:0 0 10px;">Primary flight display</div>
+        <div class="pfd-wrap">
+          <canvas class="pfd-canvas-el" id="pfd-canvas"></canvas>
+        </div>
+      </div>
+
+      <div class="section-label">Next waypoint</div>
+      <div class="stats-grid">
+        <div class="stat fill-chip">
+          <div class="fill" id="p-wpt-fill"></div>
+          <div class="stat-content">
+            <div class="stat-label">Waypoint</div>
+            <div class="stat-val" id="p-wpt" style="font-size:16px;color:#fff;">-----</div>
+          </div>
+        </div>
+        <div class="stat"><div class="stat-label">Distance</div><div class="stat-val" id="p-dist">--<span class="stat-unit">nm</span></div></div>
+        <div class="stat"><div class="stat-label">ETE</div><div class="stat-val" id="p-ete" style="font-size:16px">--:--</div></div>
+      </div>
+
+      <div class="section-label">Destination</div>
+      <div class="stats-grid">
+        <div class="stat"><div class="stat-label">Dest</div><div class="stat-val" id="p-dest" style="font-size:16px;color:var(--green)">----</div></div>
+        <div class="stat"><div class="stat-label">Distance</div><div class="stat-val" id="p-ddist">--<span class="stat-unit">nm</span></div></div>
+        <div class="stat"><div class="stat-label">ETA</div><div class="stat-val" id="p-dete" style="font-size:16px">--:--</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROUTE -->
+  <div class="screen" id="screen-route">
+    <div class="nav">
+      <div class="nav-inner">
+        <img src="/logo.png" class="nav-logo" alt="" onerror="this.style.display='none'">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div class="nav-fixes" id="route-badge">No plan</div>
+          <div class="nav-badge disconnected" id="route-live-badge">Connecting</div>
+        </div>
+      </div>
+    </div>
+    <div class="scroll" style="padding:8px 0 16px;">
+      <div class="section-label" style="padding-left:16px;">Route</div>
+      <div id="route-list" style="padding:0 16px;">
+        <div style="padding:40px 20px;text-align:center;color:var(--text4);font-size:14px;">File a SimBrief flight plan to see your route</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+  <!-- TAB BAR -->
+  <div id="tab-bar" role="tablist">
+    <div class="tab-pill"></div>
+    <div class="tab active" data-tab="home" onclick="switchTab('home')" role="tab" tabindex="0" aria-selected="true" aria-current="page" aria-label="Home">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M22 12.2039V13.725C22 17.6258 22 19.5763 20.8284 20.7881C19.6569 22 17.7712 22 14 22H10C6.22876 22 4.34315 22 3.17157 20.7881C2 19.5763 2 17.6258 2 13.725V12.2039C2 9.91549 2 8.77128 2.5192 7.82274C3.0384 6.87421 3.98695 6.28551 5.88403 5.10813L7.88403 3.86687C9.88939 2.62229 10.8921 2 12 2C13.1079 2 14.1106 2.62229 16.116 3.86687L18.116 5.10812C20.0131 6.28551 20.9616 6.87421 21.4808 7.82274" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M15 18H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </div>
+    <div class="tab" data-tab="pfd" onclick="switchTab('pfd')" role="tab" tabindex="0" aria-selected="false" aria-label="PFD">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><g stroke="currentColor" stroke-width="1.5"><path d="M22 12c0 5.523-4.477 10-10 10S2 17.523 2 12S6.477 2 12 2s10 4.477 10 10Z"/><path stroke-linecap="round" d="m19 19l-1.5-1.5M19 5l-1.5 1.5M5 19l1.5-1.5M5 5l1.5 1.5M2 12h2m16 0h2M12 4V2"/><path d="M15 12a3 3 0 0 1-6 0c0-.63.434-1.505.972-2.346c.804-1.258 1.207-1.887 2.028-1.887s1.224.629 2.028 1.887c.538.841.972 1.716.972 2.346Z"/></g></svg>
+    </div>
+    <div class="tab" data-tab="route" onclick="switchTab('route')" role="tab" tabindex="0" aria-selected="false" aria-label="Route">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><g stroke="currentColor" stroke-width="1.5"><path d="M6.142 6.142C8.904 3.381 10.284 2 12 2s3.096 1.38 5.858 4.142S22 10.284 22 12s-1.38 3.096-4.142 5.858S13.716 22 12 22s-3.096-1.38-5.858-4.142S2 13.716 2 12s1.38-3.096 4.142-5.858Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M16 11.5L13.333 9M16 11.5L13.333 14M16 11.5h-5.333C9.777 11.5 8 12 8 14"/></g></svg>
+    </div>
+  </div>
+</div>
+
+<script>
+// Chrome (and others) can restore a scrolled element's scroll position across
+// a reload/back-forward navigation, even for a non-body, overflow:hidden
+// container — which is exactly what #screens is. Left on, that alone is
+// enough to reproduce the corrupted-layout bug below on a plain reload, with
+// no click involved. Opt this page out of that restoration entirely.
+// Wrapped defensively: a bare `history` reference threw in one tested
+// environment (unclear if that's real-browser-representative or specific to
+// that harness) — this is a hardening nice-to-have, not core functionality,
+// so any failure here must never be able to break the rest of the script.
+try { if (window.history && 'scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'; } catch (e) {}
+
+// ── Auth (session cookie) ───────────────────────────────────────────────
+// The backend gates every endpoint except "/" and "/login" behind a session
+// cookie, set by POST /login. Cookies ride along on same-origin fetch/WS
+// automatically — no per-request param needed. authGateActive blocks the
+// poll/WS loops below while the login overlay is up.
+let authGateActive = false;
+function showLoginScreen(message) {
+  authGateActive = true;
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('login-error').textContent = message || '';
+  document.getElementById('login-password').focus();
+}
+async function submitLogin() {
+  const pwField = document.getElementById('login-password');
+  const btn = document.getElementById('login-submit');
+  const err = document.getElementById('login-error');
+  const password = pwField.value;
+  if (!password) return;
+  btn.disabled = true;
+  err.textContent = '';
+  try {
+    const r = await fetch('/login', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    if (r.ok) { location.reload(); return; }
+    err.textContent = 'Wrong password.';
+  } catch (e) {
+    err.textContent = 'Network error — try again.';
+  }
+  btn.disabled = false;
+}
+async function logoutAllDevices() {
+  const password = document.getElementById('login-password').value;
+  const err = document.getElementById('login-error');
+  if (!password) { err.textContent = 'Enter your password first, then tap this.'; return; }
+  try {
+    await fetch('/logout_all', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    err.textContent = 'All devices logged out. Log in again below.';
+  } catch (e) {
+    err.textContent = 'Network error — try again.';
+  }
+}
+async function logout() {
+  try { await fetch('/logout', { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
+  location.reload();
+}
+
+// ── HTML escaping ──────────────────────────────────────────────────────────
+// Backend-sourced strings (waypoint idents, SimBrief origin/dest, autopilot
+// mode text) get interpolated into innerHTML for markup like <span
+// class="stat-unit">. Escape the untrusted piece before concatenation rather
+// than switching those call sites to textContent, since the surrounding
+// markup is still real HTML this page controls.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+// Screens slide directionally based on tab order — forward (right-to-left)
+// moving toward a later tab, backward moving toward an earlier one — rather
+// than the previous instant cut.
+// var, not const: top-level const/let bindings can end up in a spurious
+// temporal-dead-zone state when this script is re-entered via automated
+// tooling (observed while testing) — var sidesteps that entirely since it
+// has no TDZ and attaches directly to the global object.
+var TAB_ORDER = ['home', 'pfd', 'route'];
+var screensEl = document.getElementById('screens');
+// #screens clips with overflow:hidden, but its absolutely-positioned children
+// still register as scrollable overflow content — anything that nudges focus
+// or calls scrollIntoView (browser default click handling, autofill,
+// accessibility tools) can silently scroll it away from (0,0), which then
+// visually shifts every screen since they're positioned relative to it. Guard
+// against that directly rather than relying on overflow:hidden alone.
+function resetScreensScroll() {
+  if (screensEl.scrollLeft !== 0 || screensEl.scrollTop !== 0) {
+    screensEl.scrollLeft = 0;
+    screensEl.scrollTop = 0;
+  }
+}
+screensEl.addEventListener('scroll', resetScreensScroll, { passive: true });
+resetScreensScroll(); // explicit baseline in case anything already scrolled it before this ran
+
+// Tab pill position/stretch: --i drives the pure-CSS left/right calc (see
+// .tab-pill), and .dir-right/.dir-left picks which edge leads vs. trails for
+// the stretch-then-settle motion (see the comment on those rules). Tracked
+// here rather than re-derived from the DOM each call since we need the
+// *previous* index to know which direction this switch is moving.
+let currentTabIdx = 0;
+function switchTab(id) {
+  const toIdx = TAB_ORDER.indexOf(id);
+  document.querySelectorAll('.screen').forEach(s => {
+    const idx = TAB_ORDER.indexOf(s.id.replace('screen-', ''));
+    s.classList.remove('active', 'prev', 'next');
+    if (idx === toIdx) s.classList.add('active');
+    else if (idx < toIdx) s.classList.add('prev');
+    else s.classList.add('next');
+  });
+  document.querySelectorAll('.tab').forEach(t => {
+    const active = t.dataset.tab === id;
+    t.classList.toggle('active', active);
+    t.setAttribute('aria-selected', String(active));
+    if (active) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
+  });
+  const tabBar = document.getElementById('tab-bar');
+  if (toIdx !== currentTabIdx) {
+    tabBar.classList.remove('dir-right', 'dir-left');
+    tabBar.classList.add(toIdx > currentTabIdx ? 'dir-right' : 'dir-left');
+    currentTabIdx = toIdx;
+  }
+  tabBar.style.setProperty('--i', toIdx);
+  resetScreensScroll();
+  if (id === 'pfd') resizePFD();
+}
+
+// Enter/Space activates any role="button"/role="tab" element — covers every
+// div-based control in the app (pause rows, arm buttons, tabs, the pause
+// toggle) with one listener instead of a repeated per-element handler.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target;
+  if (el && (el.getAttribute('role') === 'button' || el.getAttribute('role') === 'tab')) {
+    e.preventDefault();
+    el.click();
+  }
+});
+
+// ── SimBrief manual refresh ────────────────────────────────────────────────
+function refreshSimBrief() {
+  const btn = document.getElementById('simbrief-refresh-btn');
+  if (btn.classList.contains('spinning')) return; // already refreshing
+  btn.classList.add('spinning');
+  const minSpin = new Promise(resolve => setTimeout(resolve, 400)); // keep the spin visible briefly even if the fetch is instant
+  Promise.allSettled([fetch('/refresh_simbrief', { method: 'POST', cache: 'no-store', credentials: 'same-origin' }), minSpin])
+    .then(() => btn.classList.remove('spinning'));
+}
+
+// ── Auto-pause ─────────────────────────────────────────────────────────────
+// expandedRow is purely local UI state (which row's controls are open) — it
+// starts unset and is seeded once from server truth the first time data
+// arrives (see updateUI), then left alone so the user can browse other rows
+// without arming them. What's actually armed is never read from this — the
+// status line and the green dot are driven from data.pause_armed/pause_mode
+// on every update, so a reload or a second device always shows reality.
+let expandedRow = null;
+
+// ── Next-waypoint fill chip ─────────────────────────────────────────────────
+// Fraction-remaining of the current leg, not a timer: legStartDist snapshots
+// wp_distance the moment wp_next changes (a new leg just became active), so
+// the fill can drain from full toward empty as wp_distance itself closes in
+// on 0, then reset the instant the backend advances to the next waypoint.
+let lastWpNext = null;
+let legStartDist = 0;
+
+function renderPauseRows() {
+  document.querySelectorAll('.pause-row').forEach(el => {
+    el.classList.toggle('selected', el.dataset.mode === expandedRow);
+  });
+  document.getElementById('pause-distance-wrap').classList.toggle('open', expandedRow === 'distance');
+  document.getElementById('pause-tod-wrap').classList.toggle('open', expandedRow === 'tod');
+  document.getElementById('pause-time-wrap').classList.toggle('open', expandedRow === 'time');
+}
+
+function selectPauseRow(mode) {
+  expandedRow = mode;
+  renderPauseRows();
+  if (mode === 'off') disarmPause(); // no separate arm step for turning it off
+}
+
+function armDistance() {
+  const nm = parseFloat(document.getElementById('pause-distance-input').value);
+  if (!nm || nm <= 0) { alert('Enter a distance in nm.'); return; }
+  if (data.dest_distance > 0 && nm >= data.dest_distance) {
+    alert(`Already ${Math.round(data.dest_distance)} nm from destination — enter a smaller distance.`);
+    return;
+  }
+  fetch(`/pause/arm?mode=distance&threshold_nm=${nm}`, { method: 'POST', cache: 'no-store', credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(j => { if (j.status === 'error') alert(j.message); })
+    .catch(() => {});
+}
+
+function armTod() {
+  fetch('/pause/arm?mode=tod', { method: 'POST', cache: 'no-store', credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(j => { if (j.status === 'error') alert(j.message); })
+    .catch(() => {});
+}
+
+// Plain text input rather than <input type="time"> deliberately — the native
+// time picker renders in whatever 12h/AM-PM convention the OS locale uses
+// (Windows does, on a US locale), and there's no reliable cross-browser way
+// to force it to 24h display. A digits-only text field with a colon
+// auto-inserted after HH has no AM/PM concept to begin with.
+function maskTimeInput(el) {
+  let d = el.value.replace(/[^0-9]/g, '');
+  // Smart hour digit: if the first digit typed is >2, it can't be the tens
+  // digit of a valid 24h hour (max 23), so it must be a single-digit hour
+  // typed without a leading zero (e.g. "930" meaning 9:30) — pad it rather
+  // than forcing the user to type "0930". Without this, typing digits in the
+  // natural order for a single-digit hour misaligns the colon (verified: it
+  // produces "93:0", not "09:30").
+  if (d.length >= 1 && d[0] > '2') d = '0' + d;
+  d = d.slice(0, 4);
+  if (d.length >= 2 && d[0] === '2' && d[1] > '3') d = d[0] + '3' + d.slice(2); // cap hour at 23
+  if (d.length >= 3 && d[2] > '5') d = d.slice(0, 2) + '5' + d.slice(3);        // cap minutes-tens at 5
+  el.value = d.length >= 3 ? d.slice(0, 2) + ':' + d.slice(2) : d;
+}
+
+const TIME_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+function armTime() {
+  const at = document.getElementById('pause-time-input').value; // "HH:MM", 24h Zulu
+  if (!TIME_RE.test(at)) { alert('Enter a 24h Zulu time as HH:MM (00:00–23:59).'); return; }
+  fetch(`/pause/arm?mode=time&at=${encodeURIComponent(at)}`, { method: 'POST', cache: 'no-store', credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(j => { if (j.status === 'error') alert(j.message); })
+    .catch(() => {});
+}
+
+function disarmPause() {
+  fetch('/pause/disarm', { method: 'POST', cache: 'no-store', credentials: 'same-origin' }).catch(() => {});
+}
+
+function togglePause() {
+  if (!data.connected || !data.sim_running) return;
+  fetch(data.sim_paused ? '/pause/resume' : '/pause/now', { method: 'POST', cache: 'no-store', credentials: 'same-origin' }).catch(() => {});
+}
+
+// ── Data state ─────────────────────────────────────────────────────────────
+let data = {
+  ias:0, tas:0, gs:0, mach:0, pitch:0, bank:0,
+  heading:0, altitude:0, vs:0,
+  ap_speed:0, ap_altitude:0, ap_heading:0,
+  ap_active:false, fd_active:false, at_active:false, lnav_active:false,
+  ap_mode:'', roll_mode:'', pitch_mode:'', speed_mode:'',
+  wp_next:'-----', wp_distance:0, wp_ete:0, wp_bearing:0,
+  wp_index:0, wp_total:0,
+  dest:'----', dest_distance:0, dest_ete:0, origin:'----', origin_rwy:'',
+  aircraft_type:'', aircraft_reg:'',
+  track_error:0, baro:1013, fpl_loaded:false,
+  connected:false, sim_running:false,
+  waypoints: [],
+  pause_armed:false, pause_mode:null, pause_threshold_nm:0, pause_time_target:0, pause_estimated_tod_nm:0,
+  sim_paused:false,
+};
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function fmtETE(s) {
+  if (!s || s <= 0) return '--:--';
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
+  if (h > 0) return h + '+' + String(m).padStart(2,'0');
+  return m + ':' + String(ss).padStart(2,'0');
+}
+// ETA — a clock time, not a duration, so it's derived from "now + ETE" and
+// shown in Zulu (UTC): real flight planning always uses Zulu for arrival
+// times specifically to stay unambiguous across time zones, which matters
+// here since a route can span several of them. Used for every waypoint row,
+// not just the destination.
+function fmtETA(eteSecs) {
+  if (!eteSecs || eteSecs <= 0) return '--:--';
+  const arrival = new Date(Date.now() + eteSecs * 1000);
+  return String(arrival.getUTCHours()).padStart(2,'0') + ':' + String(arrival.getUTCMinutes()).padStart(2,'0') + 'Z';
+}
+// Same rendering as fmtETA but from a fixed server-side unix epoch (seconds)
+// rather than "now + duration" — used for the Time auto-pause target, which
+// is a fixed clock instant, not something that counts down.
+function fmtZuluEpoch(epochSecs) {
+  if (!epochSecs) return '--:--';
+  const d = new Date(epochSecs * 1000);
+  return String(d.getUTCHours()).padStart(2,'0') + ':' + String(d.getUTCMinutes()).padStart(2,'0') + 'Z';
+}
+// Same arrival instant, in whatever timezone the device is actually set to
+// — the pilot's own local time, not the (probably different) timezone of
+// the airport underneath the route. hour12:false keeps it consistent with
+// the Zulu format above (colon-separated 24h clock, no AM/PM ambiguity).
+function fmtETALocal(eteSecs) {
+  if (!eteSecs || eteSecs <= 0) return '';
+  const arrival = new Date(Date.now() + eteSecs * 1000);
+  return arrival.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'short' });
+}
+// ── Registration -> country flag ────────────────────────────────────────
+// ICAO nationality prefixes, longest first so e.g. "9V-" (Singapore) is
+// tried before any shorter prefix that could otherwise false-match. Not
+// exhaustive - covers the major civil aviation registers; anything
+// unmatched just shows the registration with no flag rather than a wrong one.
+const REG_PREFIXES = [
+  ['A9C-', 'BH'], ['VH-', 'AU'], ['ZK-', 'NZ'], ['9V-', 'SG'], ['9M-', 'MY'],
+  ['HS-', 'TH'], ['VT-', 'IN'], ['RP-C', 'PH'], ['HL', 'KR'], ['JA', 'JP'],
+  ['B-', 'CN'], ['4X-', 'IL'], ['TC-', 'TR'], ['SX-', 'GR'], ['CS-', 'PT'],
+  ['YR-', 'RO'], ['LZ-', 'BG'], ['HA-', 'HU'], ['SP-', 'PL'], ['EI-', 'IE'],
+  ['OH-', 'FI'], ['OY-', 'DK'], ['LN-', 'NO'], ['SE-', 'SE'], ['OE-', 'AT'],
+  ['HB-', 'CH'], ['OO-', 'BE'], ['PH-', 'NL'], ['EC-', 'ES'], ['I-', 'IT'],
+  ['F-', 'FR'], ['D-', 'DE'], ['G-', 'GB'], ['C-', 'CA'], ['N', 'US'],
+  ['A6-', 'AE'], ['A7-', 'QA'], ['HZ-', 'SA'], ['ZS-', 'ZA'], ['PP-', 'BR'],
+  ['PR-', 'BR'], ['PT-', 'BR'], ['XA-', 'MX'], ['XB-', 'MX'], ['XC-', 'MX'],
+  ['LV-', 'AR'], ['CC-', 'CL'], ['HK-', 'CO'], ['CX-', 'UY'],
+];
+function flagForRegistration(reg) {
+  if (!reg) return '';
+  const upper = reg.toUpperCase();
+  const match = REG_PREFIXES.find(([prefix]) => upper.startsWith(prefix));
+  if (!match) return '';
+  const iso2 = match[1];
+  return [...iso2].map(c => String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65)).join('');
+}
+
+function fmtAltParts(a) {
+  // Was rounding to the nearest 100ft, which silently zeroed the tens digit
+  // forever (10,450 -> "10,400"/"10,500" only ever showing 00) - nearest 10ft
+  // keeps digit-roll jitter low while actually letting the tens wheel turn.
+  const r = Math.round(a/10)*10;
+  // "FL" kept as its own piece so it can be styled as a same-size, low-
+  // opacity ghost prefix (see .hero-val .alt-fl) instead of a small
+  // caption-style unit, and so it never gets caught up in the digit-roll
+  // diffing below (it changes at most once per flight, at FL180).
+  if (r >= 18000) return { prefix: 'FL', text: String(Math.round(r/100)) };
+  return { prefix: '', text: Math.round(r).toLocaleString() };
+}
+
+// ── Altitude drum-roll display ──────────────────────────────────────────
+// Mimics an analog altimeter's rolling digit drums: only the character
+// slots that actually changed animate (old digit rotates away over the top
+// like the front face of a spinning drum curling out of view, new digit
+// rotates in from underneath) - unchanged digits just sit there, exactly
+// like a real drum counter only turns the wheel(s) whose value changed.
+// altDisplayed tracks the last string actually rendered so an unchanged
+// poll (most of them - altitude is rounded to the nearest 100ft) skips
+// touching the DOM/animations entirely.
+let altDisplayed = null;
+
+// Real altimeter drums spin faster/blurrier the faster the needle's
+// actually turning (i.e. with climb/descent rate) rather than at one fixed
+// speed regardless of VS - slow and deliberate near level flight, quick at
+// a high climb/descent rate. Clamped range chosen to stay readable even at
+// the fast end rather than modeling a literal physical spin rate.
+function altRollDuration(vs) {
+  const v = Math.min(Math.abs(vs || 0), 3000);
+  return Math.round(520 - (v / 3000) * 380); // 520ms near level -> 140ms at 3000+ fpm
+}
+
+function renderAltitude(alt, vs) {
+  const { prefix, text } = fmtAltParts(alt);
+  const full = prefix + '|' + text; // '|' separates prefix from digits so e.g. FL180 vs plain "180" can't collide
+  if (full === altDisplayed) return;
+
+  const el = document.getElementById('h-alt');
+  const prevFull = altDisplayed;
+  altDisplayed = full;
+
+  const prevText = prevFull === null ? null : prevFull.split('|')[1];
+
+  // First render, or the digit count changed (crossed a thousands comma, or
+  // transitioned through FL180) - the per-slot diff below assumes equal-
+  // length strings, so just redraw statically rather than force an
+  // animation across a structurally different layout.
+  if (prevText === null || prevText.length !== text.length) {
+    el.innerHTML = (prefix ? `<span class="alt-fl">${prefix}</span>` : '') +
+      [...text].map(ch => `<span class="alt-slot"><span>${ch}</span></span>`).join('');
+    return;
+  }
+
+  const slots = el.querySelectorAll('.alt-slot');
+  for (let i = 0; i < text.length; i++) {
+    if (prevText[i] === text[i]) continue; // this wheel isn't turning this tick
+    const slot = slots[i];
+    if (!slot) continue;
+    // Hard cap independent of animation timing: if the tab was ever
+    // backgrounded, the browser pauses Web Animations outright, so a
+    // previous swap's onfinish may never fire and its old span never gets
+    // removed. Trimming down to one child before starting a new swap bounds
+    // growth regardless — confirmed via a real backgrounded-tab test that
+    // accumulated 19 stacked children on one slot without this.
+    while (slot.children.length > 1) slot.firstElementChild.remove();
+    const oldInner = slot.lastElementChild; // most recently active digit, even if a prior swap is still finishing
+    const newInner = document.createElement('span');
+    newInner.textContent = text[i];
+    newInner.style.transform = 'translateY(45%) rotateX(-75deg)';
+    newInner.style.opacity = '0';
+    slot.appendChild(newInner);
+
+    const duration = altRollDuration(vs);
+    const easing = 'cubic-bezier(0.22, 1, 0.36, 1)'; // strong deceleration - reads as a mechanical settle, not a linear slide
+
+    // Old digit tips backward and up, as if curling over the top of a
+    // rotating drum and disappearing behind it - rotateX (not translateY
+    // alone) is what actually sells "rolling", a flat slide just looks like
+    // the text sliding sideways-in-place.
+    oldInner.animate(
+      [
+        { transform: 'translateY(0) rotateX(0deg)', opacity: 1 },
+        { transform: 'translateY(-45%) rotateX(75deg)', opacity: 0 },
+      ],
+      { duration, easing, fill: 'forwards' }
+    ).onfinish = () => oldInner.remove();
+
+    // New digit tips forward from behind/underneath and rotates up into
+    // place - the mirror image of the old digit's exit.
+    newInner.animate(
+      [
+        { transform: 'translateY(45%) rotateX(-75deg)', opacity: 0 },
+        { transform: 'translateY(0) rotateX(0deg)', opacity: 1 },
+      ],
+      { duration, easing, fill: 'forwards' }
+    );
+  }
+}
+function fmtVS(v) {
+  const clamped = Math.max(-9999, Math.min(9999, v));
+  if (Math.abs(clamped) < 50) return '±0';
+  return (clamped > 0 ? '+' : '') + Math.round(clamped / 100) * 100;
+}
+function set(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
+
+// ── UI update ──────────────────────────────────────────────────────────────
+function updateUI() {
+  const d = data;
+  const connected = d.connected && d.sim_running;
+
+  // No full-screen blocking overlay here on purpose: the app should stay
+  // fully visible and scrollable even with no sim connected (e.g. checking
+  // the route or auto-pause settings before a flight) — the per-screen
+  // "Disconnected"/"Waiting" badge below is the only status indicator now.
+
+  // Badge — one live-connection pill per screen now (Home/PFD/Route each
+  // have their own top bar), all driven from the same state. "Paused" takes
+  // priority over "Live" whenever the sim is genuinely paused but still
+  // connected — without this, a paused sim looked identical to a flying one
+  // at a glance (the bug that motivated this: an overnight long-haul sat
+  // paused in the Esc menu for a while and the badge still said "Live").
+  const paused    = connected && d.sim_paused;
+  const badgeText = paused ? 'Paused' : connected ? 'Live' : (d.connected ? 'Waiting' : 'Disconnected');
+  const badgeCls  = paused ? 'paused' : connected ? '' : (d.connected ? 'waiting' : 'disconnected');
+  ['home-badge', 'pfd-badge', 'route-live-badge'].forEach(id => {
+    const el = document.getElementById(id);
+    el.textContent = badgeText;
+    el.className = 'nav-badge ' + badgeCls;
+  });
+
+  // Route card
+  if (d.fpl_loaded) {
+    set('h-origin', esc(d.origin || '----'));
+    set('h-dest',   esc(d.dest   || '----'));
+    set('h-sub', d.dest_distance > 0 ? `${Math.round(d.dest_distance).toLocaleString()} NM TO GO` : `${d.wp_total || 0} waypoints`);
+    set('h-eta', d.dest_ete > 0 ? `ZULU ${fmtETA(d.dest_ete)} · LOCAL ${fmtETALocal(d.dest_ete)}` : '');
+    const pills = buildPills(d);
+    document.getElementById('h-pills').innerHTML = pills;
+  }
+
+  // Aircraft identity (registration + country flag + ICAO type) - independent
+  // of whether a flight plan is loaded, so it still shows before SimBrief
+  // data comes in as long as the sim connection itself has reported it.
+  const identityEl = document.getElementById('h-identity');
+  if (d.aircraft_reg || d.aircraft_type) {
+    identityEl.style.display = 'flex';
+    document.getElementById('h-flag').textContent = flagForRegistration(d.aircraft_reg);
+    document.getElementById('h-reg').textContent = d.aircraft_reg || '';
+    document.getElementById('h-actype').textContent = d.aircraft_type ? ('· ' + d.aircraft_type) : '';
+  } else {
+    identityEl.style.display = 'none';
+  }
+
+  // Telemetry
+  set('h-ias',  Math.round(d.ias) + '<span class="stat-unit">kt</span>');
+  renderAltitude(d.altitude, d.vs);
+  set('h-gs',   Math.round(d.gs)  + '<span class="stat-unit">kt</span>');
+  set('h-hdg',  String(Math.round(d.heading)).padStart(3,'0') + '<span class="stat-unit">°</span>');
+  set('h-mach', '.' + String(Math.round(d.mach * 1000)).padStart(3,'0'));
+
+  const vs = Math.round(d.vs);
+  const vsCol = vs > 50 ? 'var(--green)' : vs < -50 ? 'var(--red)' : 'var(--text)';
+  document.getElementById('h-vs').style.color = vsCol;
+  set('h-vs', fmtVS(vs));
+
+  // CDI
+  const te = d.track_error || 0;
+  const absTE = Math.abs(te);
+  const cdiCol = !d.fpl_loaded ? 'var(--text4)' : absTE <= 2 ? 'var(--green)' : absTE <= 5 ? 'var(--amber)' : 'var(--red)';
+  const cdiStatus = !d.fpl_loaded ? 'No plan' : absTE <= 2 ? 'On track' : absTE <= 5 ? 'Slight deviation' : 'Off course';
+  document.getElementById('h-cdi-status').textContent = cdiStatus;
+  document.getElementById('h-cdi-status').style.color = cdiCol;
+  document.getElementById('h-cdi-val').textContent = d.fpl_loaded ? (Math.abs(te).toFixed(1) + '° ' + (te > 0 ? 'R' : te < 0 ? 'L' : '')) : '---';
+  document.getElementById('h-cdi-val').style.color = cdiCol;
+  const dotPct = 50 - Math.max(-10, Math.min(10, te)) * 4;
+  document.getElementById('h-cdi-dot').style.left = dotPct + '%';
+  document.getElementById('h-cdi-dot').style.background = cdiCol;
+
+  // Nav stats
+  set('h-wpt',  esc(d.wp_next || '-----'));
+  set('h-dist', d.wp_distance > 0 ? d.wp_distance.toFixed(1) + '<span class="stat-unit">nm</span>' : '--<span class="stat-unit">nm</span>');
+  set('h-ete',  fmtETE(d.wp_ete));
+
+  // PFD tab stats
+  set('p-wpt',   esc(d.wp_next || '-----'));
+  set('p-dist',  d.wp_distance > 0 ? d.wp_distance.toFixed(1) + '<span class="stat-unit">nm</span>' : '--<span class="stat-unit">nm</span>');
+  set('p-ete',   fmtETE(d.wp_ete));
+  set('p-dest',  esc(d.dest || '----'));
+  set('p-ddist', d.dest_distance > 0 ? Math.round(d.dest_distance) + '<span class="stat-unit">nm</span>' : '--<span class="stat-unit">nm</span>');
+  set('p-dete',  fmtETA(d.dest_ete));
+
+  if (d.wp_next !== lastWpNext) { lastWpNext = d.wp_next; legStartDist = d.wp_distance; }
+  const fillFrac = legStartDist > 0 ? Math.max(0, Math.min(1, d.wp_distance / legStartDist)) : 1;
+  const wptFill = document.getElementById('p-wpt-fill');
+  if (wptFill) wptFill.style.transform = `scaleX(${fillFrac})`;
+
+  // Route list
+  if (d.fpl_loaded && d.waypoints && d.waypoints.length > 0) {
+    updateRouteList(d);
+  }
+
+  // Auto-pause card — seed the expanded row from server truth exactly once,
+  // then leave it to the user; the status line and dot always reflect the
+  // server's actual armed state, independent of which row is expanded.
+  if (expandedRow === null) {
+    expandedRow = d.pause_armed ? d.pause_mode : 'off';
+    renderPauseRows();
+  }
+  document.querySelectorAll('.pause-row-dot').forEach(el => {
+    const mode = el.closest('.pause-row').dataset.mode;
+    el.classList.toggle('armed', d.pause_armed && d.pause_mode === mode);
+  });
+  const statusEl = document.getElementById('pause-status');
+  if (d.pause_armed) {
+    statusEl.textContent = d.pause_mode === 'distance' ? `Auto-pause: armed — pauses at ${d.pause_threshold_nm} nm from destination`
+      : d.pause_mode === 'time' ? `Auto-pause: armed — pauses at ${fmtZuluEpoch(d.pause_time_target)}`
+      : `Auto-pause: armed — TOD (~${Math.round(d.pause_estimated_tod_nm)} nm)`;
+  } else {
+    statusEl.textContent = 'Auto-pause: off';
+  }
+  const todEst = document.getElementById('pause-tod-estimate');
+  if (todEst) {
+    todEst.textContent = d.pause_estimated_tod_nm > 0
+      ? `~${Math.round(d.pause_estimated_tod_nm)} nm out (estimated)`
+      : 'estimate unavailable — no flight plan loaded';
+  }
+  const distHint = document.getElementById('pause-distance-hint');
+  if (distHint) {
+    distHint.textContent = d.dest_distance > 0
+      ? `currently ${Math.round(d.dest_distance)} nm from destination`
+      : 'destination distance unavailable — no flight plan loaded';
+  }
+
+  // Pause/resume toggle — only re-render (and crossfade) on an actual state
+  // change, driven by data.sim_paused (server truth via SimConnect's own
+  // paused flag), not by which way the button was last tapped.
+  const pauseToggle = document.getElementById('pause-now-row');
+  const wantPaused = !!d.sim_paused;
+  const wantDisabled = !connected;
+  const stateKey = wantDisabled ? 'disabled' : String(wantPaused);
+  const isFirstRender = pauseToggle.dataset.paused === undefined;
+  if (isFirstRender || pauseToggle.dataset.paused !== stateKey) {
+    const applyState = () => {
+      pauseToggle.classList.toggle('disabled', wantDisabled);
+      pauseToggle.classList.toggle('paused', !wantDisabled && wantPaused);
+      const label = wantDisabled
+        ? 'Sim not connected'
+        : (wantPaused ? 'Sim paused — tap to resume' : 'Sim in session — tap to pause');
+      pauseToggle.querySelector('i').className = wantDisabled
+        ? 'ti ti-plane-off'
+        : (wantPaused ? 'ti ti-player-play-filled' : 'ti ti-player-pause-filled');
+      pauseToggle.querySelector('span').textContent = label;
+      pauseToggle.setAttribute('aria-label', label);
+    };
+    if (isFirstRender) {
+      applyState(); // nothing to crossfade from yet on first load
+    } else {
+      pauseToggle.classList.add('swap');
+      setTimeout(() => { applyState(); pauseToggle.classList.remove('swap'); }, 150);
+    }
+    pauseToggle.dataset.paused = stateKey;
+  }
+}
+
+function buildPills(d) {
+  let html = '';
+  if (d.ap_active)    html += '<span class="pill pill-blue">AP ' + esc(d.ap_mode||'ON') + '</span>';
+  if (d.lnav_active)  html += '<span class="pill pill-green">LNAV</span>';
+  if (d.roll_mode && !d.lnav_active) html += `<span class="pill pill-amber">${esc(d.roll_mode)}</span>`;
+  if (d.speed_mode)   html += `<span class="pill pill-blue">${esc(d.speed_mode)}</span>`;
+  if (d.at_active)    html += '<span class="pill pill-green">A/T</span>';
+  return html;
+}
+
+// Route list state: routeRemovedUpTo tracks the highest waypoint index
+// that's already been animated away and dropped from the DOM (so the list
+// only ever shows the active fix and everything still ahead of it);
+// routeAnimating is true for the brief window a collapse is in flight, so a
+// live data update landing mid-animation doesn't yank the row back before it
+// finishes (which a plain re-render would, since it'd just rebuild from the
+// unchanged underlying wpts/activeIdx and re-show everything).
+let routeRemovedUpTo = -1;
+let routeAnimating = false;
+let routeListSignature = null;
+
+function updateRouteList(d) {
+  if (routeAnimating) return;
+  const list = document.getElementById('route-list');
+  const badge = document.getElementById('route-badge');
+  const wpts = d.waypoints;
+  const activeIdx = (d.wp_index || 1) - 1;
+
+  badge.textContent = (d.wp_index||0) + '/' + (d.wp_total||0) + ' fixes';
+
+  // A different flight plan (re-filed, refreshed mid-flight, etc.) — the
+  // previous removal/animation state no longer corresponds to these
+  // waypoints at all, so start over rather than animate against stale rows.
+  const sig = wpts.length + '|' + (wpts[0] && wpts[0].ident) + '|' + (wpts[wpts.length-1] && wpts[wpts.length-1].ident);
+  if (sig !== routeListSignature) {
+    routeListSignature = sig;
+    routeRemovedUpTo = -1;
+    renderRouteRows(wpts, activeIdx, list);
+    scrollActiveRouteRowIntoView(list, activeIdx);
+    return;
+  }
+
+  const toRemove = activeIdx - 1 - routeRemovedUpTo;
+  if (toRemove > 0 && list.children.length >= toRemove) {
+    // Flash the just-passed row(s) to "past" styling, then shrink them away
+    // — collapsing their height pushes everything below up into place via
+    // ordinary document flow, no separate "push" animation needed. A while-
+    // loop elsewhere can advance activeIdx by more than one fix at once
+    // (catching up after being stuck on a stale waypoint), so this animates
+    // all of them together rather than assuming exactly one.
+    const rows = [...list.children].slice(0, toRemove);
+    rows.forEach(row => {
+      const dot = row.querySelector('.wpt-dot'), ident = row.querySelector('.wpt-ident'), eta = row.querySelector('.wpt-eta');
+      dot.classList.add('past'); ident.classList.add('past'); eta.classList.add('past');
+      eta.textContent = 'Past';
+      row.classList.add('wpt-row-collapsing');
+    });
+    routeAnimating = true;
+    setTimeout(() => {
+      routeAnimating = false;
+      routeRemovedUpTo = activeIdx - 1;
+      renderRouteRows(wpts, activeIdx, list);
+      scrollActiveRouteRowIntoView(list, activeIdx);
+    }, 340); // a touch past --dur-slow (320ms) so the transition has fully settled first
+    return;
+  }
+
+  renderRouteRows(wpts, activeIdx, list);
+  scrollActiveRouteRowIntoView(list, activeIdx);
+}
+
+function renderRouteRows(wpts, activeIdx, list) {
+  let html = '';
+  wpts.forEach((w, i) => {
+    if (i <= routeRemovedUpTo) return; // already animated away in a previous update
+    const isActive = i === activeIdx;
+    const isDest   = i === wpts.length - 1;
+    const cls = isActive ? 'active' : isDest ? 'dest' : '';
+    const rowCls = isActive ? 'wpt-row wpt-active-row' : 'wpt-row';
+    const dist  = w.dist_nm > 0 ? w.dist_nm.toFixed(0) + ' NM' : '';
+    const zulu  = w.ete_secs > 0 ? fmtETA(w.ete_secs) : '—';
+    const local = w.ete_secs > 0 ? `<span class="wpt-local">${fmtETALocal(w.ete_secs)}</span>` : '';
+    html += `<div class="${rowCls}">
+      <div class="wpt-dot ${cls}"></div>
+      <span class="wpt-ident ${cls}">${isActive ? '▶ ' : ''}${esc(w.ident)}</span>
+      <span class="wpt-dist">${dist}</span>
+      <span class="wpt-eta ${cls}">${zulu}${local}</span>
+    </div>`;
+  });
+  list.innerHTML = html;
+}
+
+// Scroll the active row into view only when it actually changes — this runs
+// on every data update (as often as every ~50ms in a live flight), so doing
+// it unconditionally fought any attempt to manually scroll the list: the
+// instant you scrolled away from the active waypoint, the very next update
+// snapped it right back, making the list feel unscrollable.
+let lastScrolledRouteIdx = null;
+function scrollActiveRouteRowIntoView(list, activeIdx) {
+  if (activeIdx === lastScrolledRouteIdx) return;
+  lastScrolledRouteIdx = activeIdx;
+  const activeRow = list.querySelector('.wpt-active-row');
+  if (!activeRow) return;
+  activeRow.scrollIntoView({block:'nearest'});
+}
+
+// ── WebSocket + Demo mode ─────────────────────────────────────────────────
+const DEMO_WAYPOINTS = [
+  {ident:'KDFW',  dist_nm:0,   ete_secs:0},
+  {ident:'RNGRR', dist_nm:0,   ete_secs:0},
+  {ident:'PODDE', dist_nm:0,   ete_secs:0},
+  {ident:'DARTZ', dist_nm:42,  ete_secs:312},
+  {ident:'EKTOR', dist_nm:118, ete_secs:874},
+  {ident:'TRM',   dist_nm:210, ete_secs:1560},
+  {ident:'SYMON', dist_nm:268, ete_secs:1991},
+  {ident:'DERBB', dist_nm:298, ete_secs:2218},
+  {ident:'KLAX',  dist_nm:342, ete_secs:2546},
+];
+
+let demoT = 0;
+function runDemo() {
+  demoT += 0.016;
+  Object.assign(data, {
+    ias: 280 + 6 * Math.sin(demoT * 0.3),
+    tas: 495,
+    gs:  490 + 4 * Math.sin(demoT * 0.2),
+    mach: 0.820 + 0.002 * Math.sin(demoT * 0.3),
+    pitch: 1.5 + 1.2 * Math.sin(demoT * 0.18),
+    bank:  8 * Math.sin(demoT * 0.12),
+    heading: (272 + demoT * 0.3) % 360,
+    altitude: 35000 + 200 * Math.sin(demoT * 0.08),
+    vs: 80 * Math.sin(demoT * 0.08),
+    ap_speed: 280, ap_altitude: 35000, ap_heading: 275,
+    ap_active: true, fd_active: true, at_active: true, lnav_active: true,
+    ap_mode: 'CMD', roll_mode: 'LNAV', pitch_mode: 'VNAV SPD', speed_mode: 'MCP SPD',
+    wp_next: 'DARTZ', wp_distance: 42 - demoT * 0.05, wp_ete: 312,
+    wp_bearing: 278, wp_index: 4, wp_total: 9,
+    dest: 'KLAX', dest_distance: 342, dest_ete: 2546,
+    origin: 'KDFW', track_error: 1.2 + 0.8 * Math.sin(demoT * 0.15),
+    baro: 1013, fpl_loaded: true,
+    connected: true, sim_running: true,
+    waypoints: DEMO_WAYPOINTS,
+    pause_armed: data.pause_armed || false,
+    pause_mode: data.pause_mode || null,
+    pause_threshold_nm: data.pause_threshold_nm || 0,
+    pause_estimated_tod_nm: Math.round((35000 - 0) / 318),
+    sim_paused: data.sim_paused || false,
+  });
+  pushSample(data);
+  updateUI();
+  pfdDirty = true;
+}
+
+// Off by default — this used to run unconditionally in production, which
+// both cluttered the UI on every load and (via innerHTML +=) was a DOM-XSS
+// vector for anything logged through it. Opt in with ?debug=1.
+var DEBUG = /(^|[?&])debug=1(&|$)/.test(location.search);
+let ws;
+let debugEl;
+function dbg(msg) {
+  if (!DEBUG) return;
+  if (!debugEl) {
+    debugEl = document.createElement('div');
+    debugEl.style.cssText = 'position:fixed;bottom:100px;left:0;right:0;background:rgba(0,0,0,0.85);color:#0f0;font:11px monospace;padding:8px;z-index:999;max-height:120px;overflow-y:auto;';
+    document.body.appendChild(debugEl);
+  }
+  const line = document.createElement('div');
+  line.textContent = msg; // textContent, not innerHTML — msg can carry arbitrary text (e.g. location.href, error messages)
+  debugEl.appendChild(line);
+  debugEl.scrollTop = debugEl.scrollHeight;
+}
+
+function applySample(d) {
+  Object.assign(data, d);
+  pushSample(d);
+  updateUI();
+  pfdDirty = true;
+  if (debugEl) debugEl.remove(); debugEl = null;
+}
+
+function connect() {
+  // If opened as a local file — demo mode
+  if (location.protocol === 'file:' || location.hostname === '') {
+    setInterval(runDemo, 16);
+    return;
+  }
+
+  dbg('Starting: ' + location.href);
+
+  // HTTP polling — the safe default and fallback. Each cycle awaits the
+  // fetch before scheduling the next one, so the real sample interval is
+  // (network round-trip + 50ms), not 50ms — over a tunnel with ~100ms+
+  // round-trips that's a real cost. WebSocket (below) avoids this because
+  // the server pushes on its own schedule with no per-sample round trip.
+  let polling = false;
+  async function poll() {
+    if (!polling) return;
+    try {
+      const r = await fetch('/data', { cache: 'no-store', credentials: 'same-origin' });
+      dbg('fetch status: ' + r.status);
+      if (r.status === 401 || r.status === 403) {
+        polling = false;
+        showLoginScreen();
+        return;
+      }
+      if (r.ok) {
+        const d = await r.json();
+        applySample(d);
+      } else {
+        data.connected = false;
+        updateUI();
+        dbg('fetch not ok: ' + r.status);
+      }
+    } catch(e) {
+      data.connected = false;
+      updateUI();
+      dbg('fetch error: ' + e.message);
+    }
+    if (polling) setTimeout(poll, 50);
+  }
+  function startPolling() {
+    if (polling || authGateActive) return;
+    polling = true;
+    dbg('Using HTTP polling');
+    poll();
+  }
+
+  // WebSocket — tried on every connect, preferred whenever it works. Built
+  // from location.host: the proxy Worker forwards WS upgrades transparently
+  // (see cloudflare-worker.js), so location.host is always the stable
+  // bookmark host and this never needs the tunnel's real hostname directly.
+  // Auth rides along as the browser's own session cookie, sent automatically
+  // on the handshake request — no URL param needed. A rejected handshake
+  // surfaces to the browser only as a generic close/error (no HTTP status),
+  // so unauthorized detection is left to the poll() loop above, which always
+  // runs alongside this and gets a real 401/403 to check.
+  function startWebSocket() {
+    if (authGateActive) return;
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    let opened = false;
+    let socket;
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch (e) {
+      dbg('WebSocket unavailable: ' + e.message);
+      setTimeout(startWebSocket, 10000);
+      return;
+    }
+    const openTimeout = setTimeout(() => { if (!opened) socket.close(); }, 3000);
+
+    socket.onopen = () => {
+      opened = true;
+      clearTimeout(openTimeout);
+      polling = false;
+      dbg('WebSocket connected');
+    };
+    socket.onmessage = (ev) => {
+      try { applySample(JSON.parse(ev.data)); } catch (e) { /* ignore malformed frame */ }
+    };
+    socket.onerror = () => { dbg('WebSocket error'); };
+    socket.onclose = () => {
+      dbg('WebSocket closed — using polling');
+      if (!authGateActive) {
+        startPolling();
+        setTimeout(startWebSocket, 10000); // retry in case it was a transient hiccup
+      }
+    };
+  }
+
+  startPolling();   // never leaves the display without data
+  startWebSocket();  // upgrades to push as soon as it's available
+}
+
+// ── Predictive display state for smooth, low-latency animation ────────────
+// Rather than deliberately rendering slightly in the past and interpolating
+// between two real samples (safe, but always ~130-220ms behind real time),
+// this extrapolates forward from the latest real sample using its rate of
+// change — like game netcode does for the locally-controlled entity — so the
+// display tracks near real "now" instead of a fixed delay behind it. When a
+// new real sample arrives, we don't snap to it (would show as a pop); we
+// measure the gap between what was on screen and the new true value, then
+// blend that small correction out over CORRECTION_WINDOW ms.
+//
+// Tuned and verified with a standalone simulation (not just eyeballed) — and
+// once against real telemetry, revised: computing velocity from only the
+// immediately-previous sample differentiates real SimConnect measurement
+// noise (present even in steady, level flight), and differentiating noise
+// amplifies it — a tiny position wobble divided by a ~50ms sample gap becomes
+// a comparatively large *rate* wobble, extrapolated forward every frame as a
+// persistent high-frequency shimmer ("jagged"). Fix: derive velocity from a
+// longer baseline (oldest of the last few samples -> newest, ~150ms instead
+// of ~50ms) — real motion accumulates over that time while independent
+// per-sample noise mostly doesn't, so the noise-to-signal ratio drops
+// substantially without a more complex filter. A small deadband on the
+// reconciliation correction skips blending in corrections too small to be
+// anything but noise, rather than chasing them every ~50ms.
+//   - EXTRAPOLATION_CAP bounds *how far* a velocity estimate is trusted to
+//     extrapolate, not just when to give up — pitch/bank/heading rates from a
+//     single control input are often transient, not sustained, so unlike
+//     altitude (below) a rate derived from sample history shouldn't be
+//     trusted indefinitely. Capping the distance (not just cutting off) still
+//     lets it "coast" briefly through a gap rather than freezing instantly.
+//   - Altitude is a special case: `vs` (vertical speed) is already a directly
+//     measured rate from the sim, far less noisy than a derivative of
+//     altitude samples — simulation showed ~0.2ft steady-state lag using it
+//     directly vs. 8ft+ deriving altitude's own rate the same way as the
+//     other fields.
+// EXTRAPOLATION_CAP measured directly against jitter (not assumed): a synthetic-noise
+// simulation of realistic steady-flight sensor noise showed jitter scales with this value
+// almost linearly (80ms was ~28% above the smoothest-possible floor; 20ms is only ~17% above
+// it) — 80ms was too aggressive relative to real SimConnect noise. 20ms keeps a small amount
+// of genuine prediction while landing close to the smooth floor.
+const EXTRAPOLATION_CAP = 20;    // ms — max distance a velocity estimate is trusted to extrapolate
+const CORRECTION_WINDOW = 100;   // ms to blend out a reconciliation correction
+const HISTORY_SIZE = 4;          // samples kept for the velocity baseline (~150ms at WS's real ~50ms cadence)
+const CORRECTION_DEADBAND = { ias:0.3, altitude:0.5, vs:20, pitch:0.1, bank:0.1, heading:0.1 }; // below this, a "correction" is just noise, not signal
+
+let history = []; // [{t, d}], oldest first, up to HISTORY_SIZE — most recent entry doubles as the extrapolation anchor
+let velocity = { ias:0, pitch:0, bank:0, heading:0 }; // units/ms, from the oldest-vs-newest kept sample (altitude/vs use vs directly instead, see above)
+let correctionOffset = { ias:0, altitude:0, vs:0, pitch:0, bank:0, heading:0 };
+let correctionStart = 0;
+
+function angDiff(a, b) { return ((b - a + 540) % 360) - 180; } // shortest signed delta from angle a to angle b
+
+function pushSample(d) {
+  const t = performance.now();
+  // Guard against a stale response landing after a newer one — can happen
+  // for one message during the brief WebSocket/polling handoff.
+  if (history.length && t < history[history.length - 1].t) return;
+
+  const newD = { ias:d.ias, altitude:d.altitude, vs:d.vs, pitch:d.pitch, bank:d.bank, heading:d.heading };
+  const prev = history.length ? history[history.length - 1] : null;
+
+  if (prev) {
+    const baseline = history[0]; // oldest currently kept — longer baseline than just `prev`, see comment above
+    const dt = t - baseline.t;
+    if (dt > 0) {
+      velocity = {
+        ias:     (newD.ias   - baseline.d.ias)   / dt,
+        pitch:   (newD.pitch - baseline.d.pitch) / dt,
+        bank:    angDiff(baseline.d.bank,    newD.bank)    / dt,
+        heading: angDiff(baseline.d.heading, newD.heading) / dt,
+      };
+    }
+    // disp still holds whatever was on screen the instant before this new
+    // sample arrived (at most one rAF frame stale) — the gap between that
+    // and the new real value is the correction to blend out, unless it's
+    // small enough to be noise (see CORRECTION_DEADBAND above).
+    const raw = {
+      ias:      disp.ias      - newD.ias,
+      altitude: disp.altitude - newD.altitude,
+      vs:       disp.vs       - newD.vs,
+      pitch:    disp.pitch    - newD.pitch,
+      bank:     angDiff(newD.bank,    disp.bank),
+      heading:  angDiff(newD.heading, disp.heading),
+    };
+    correctionOffset = {
+      ias:      Math.abs(raw.ias)      < CORRECTION_DEADBAND.ias      ? 0 : raw.ias,
+      altitude: Math.abs(raw.altitude) < CORRECTION_DEADBAND.altitude ? 0 : raw.altitude,
+      vs:       Math.abs(raw.vs)       < CORRECTION_DEADBAND.vs       ? 0 : raw.vs,
+      pitch:    Math.abs(raw.pitch)    < CORRECTION_DEADBAND.pitch    ? 0 : raw.pitch,
+      bank:     Math.abs(raw.bank)     < CORRECTION_DEADBAND.bank     ? 0 : raw.bank,
+      heading:  Math.abs(raw.heading)  < CORRECTION_DEADBAND.heading  ? 0 : raw.heading,
+    };
+    correctionStart = t;
+  }
+
+  history.push({ t, d: newD });
+  if (history.length > HISTORY_SIZE) history.shift();
+}
+
+let disp = {
+  ias:0, altitude:0, vs:0, heading:0, pitch:0, bank:0,
+  ap_speed:0, ap_altitude:0, ap_heading:0,
+};
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function lerpAngle(a, b, t) {
+  let d = ((b - a + 540) % 360) - 180;
+  return a + d * t;
+}
+
+function updateDisp() {
+  if (history.length) {
+    const lastSample = history[history.length - 1];
+    const now = performance.now();
+    const dt = Math.min(now - lastSample.t, EXTRAPOLATION_CAP);
+    const vsRate = lastSample.d.vs / 60000; // ft/min -> ft/ms, directly from the sim — see comment above
+
+    const base = {
+      ias:      lastSample.d.ias      + velocity.ias * dt,
+      altitude: lastSample.d.altitude + vsRate * dt,
+      vs:       lastSample.d.vs,
+      pitch:    lastSample.d.pitch    + velocity.pitch   * dt,
+      bank:     lastSample.d.bank     + velocity.bank    * dt,
+      heading:  lastSample.d.heading  + velocity.heading * dt,
+    };
+
+    const sinceCorr = now - correctionStart;
+    const blend = sinceCorr >= CORRECTION_WINDOW ? 0 : (1 - sinceCorr / CORRECTION_WINDOW);
+
+    disp.ias      = base.ias      + correctionOffset.ias      * blend;
+    disp.altitude = base.altitude + correctionOffset.altitude * blend;
+    disp.vs       = base.vs       + correctionOffset.vs       * blend;
+    disp.pitch    = base.pitch    + correctionOffset.pitch    * blend;
+    disp.bank     = base.bank     + correctionOffset.bank     * blend;
+    disp.heading  = ((base.heading + correctionOffset.heading * blend) % 360 + 360) % 360;
+  }
+
+  disp.ap_speed   = lerp(disp.ap_speed,   data.ap_speed,   0.3);
+  disp.ap_altitude= lerp(disp.ap_altitude,data.ap_altitude,0.3);
+  disp.ap_heading = lerpAngle(disp.ap_heading, data.ap_heading, 0.3);
+}
+const canvas = document.getElementById('pfd-canvas');
+const ctx = canvas.getContext('2d');
+let pfdDirty = true;
+
+const C = {
+  bg:'#1c1c1c', tape_bg:'#2a2a2a', fma_bg:'#4a4a4a', fma_div:'#888',
+  sky:'#4a96cc', ground:'#6b3d1e',
+  white:'#fff', magenta:'#e640fb', green:'#00e000',
+  cyan:'#00d8d8', amber:'#ffaa00', red:'#ff2020',
+  gray_dim:'#888', black:'#000', tape_line:'#ccc',
+};
+
+let PW = 320, PH = 300;
+const REF_W = 390, REF_H = 360;
+let sc = 1;
+
+function resizePFD() {
+  const wrap = canvas.parentElement;
+  PW = wrap.clientWidth;
+  sc = PW / REF_W;
+  PH = REF_H * sc;
+  canvas.width  = Math.round(PW);
+  canvas.height = Math.round(PH);
+  canvas.style.height = Math.round(PH) + 'px';
+  pfdDirty = true;
+}
+resizePFD();
+window.addEventListener('resize', resizePFD);
+
+function s(v) { return v * sc; }
+
+const FMA_Y=0, FMA_H=30;
+const AI_X=76, AI_Y=FMA_H+2, AI_W=238, AI_H=238;
+const AI_CX=AI_X+AI_W/2, AI_CY=AI_Y+AI_H/2, AI_R=12;
+const SPD_X=0, SPD_Y=FMA_H+2, SPD_W=74, SPD_H=AI_H;
+const ALT_X=AI_X+AI_W+2, ALT_Y=FMA_H+2, ALT_W=74, ALT_H=AI_H;
+const VS_X=ALT_X+ALT_W, VS_Y=ALT_Y, VS_W=28, VS_H=AI_H;
+const HDG_Y=AI_Y+AI_H+3, HDG_H=52;
+const SPD_BOX_W=58, ALT_BOX_W=64;
+
+function fillR(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(s(x),s(y),s(w),s(h));}
+function txt(str,x,y,sz,c,align='left',base='alphabetic',bold=false){
+  ctx.font=(bold?'bold ':'')+s(sz)+"px 'B612 Mono','Courier New',monospace";
+  ctx.fillStyle=c;ctx.textAlign=align;ctx.textBaseline=base;ctx.fillText(str,s(x),s(y));
+}
+function ln(x1,y1,x2,y2,c,w=1){ctx.strokeStyle=c;ctx.lineWidth=s(w);ctx.beginPath();ctx.moveTo(s(x1),s(y1));ctx.lineTo(s(x2),s(y2));ctx.stroke();}
+
+function drawFMA(){
+  fillR(0,FMA_Y,REF_W,FMA_H,C.fma_bg);
+  const bw=REF_W/3;
+  ln(bw,FMA_Y+2,bw,FMA_Y+FMA_H-2,C.fma_div,1);
+  ln(bw*2,FMA_Y+2,bw*2,FMA_Y+FMA_H-2,C.fma_div,1);
+  txt(data.roll_mode||'---',bw*0.5,FMA_Y+19,12,C.green,'center','alphabetic',true);
+  txt(data.pitch_mode||'---',bw*1.5,FMA_Y+19,12,C.green,'center','alphabetic',true);
+  txt(data.speed_mode||'---',bw*2.5,FMA_Y+19,12,C.green,'center','alphabetic',true);
+  if(data.ap_active) txt(data.ap_mode||'',bw*0.5,FMA_Y+28,8,C.white,'center');
+  if(data.fd_active&&!data.ap_active) txt('FD',AI_CX,AI_Y+18,13,C.green,'center','alphabetic',true);
+}
+
+function drawAI(){
+  const cx=s(AI_CX),cy=s(AI_CY),w=s(AI_W),h=s(AI_H),r=s(AI_R);
+  ctx.save();
+  ctx.beginPath();ctx.roundRect(s(AI_X),s(AI_Y),w,h,r);ctx.clip();
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(-disp.bank*Math.PI/180);
+  const ppp=s(4.4), po=disp.pitch*ppp;
+  ctx.translate(0,po);
+  ctx.fillStyle=C.sky;ctx.fillRect(-w,-h*3,w*2,h*3);
+  ctx.fillStyle=C.ground;ctx.fillRect(-w,0,w*2,h*3);
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(1.5);ctx.beginPath();ctx.moveTo(-w,0);ctx.lineTo(w,0);ctx.stroke();
+  ctx.font=s(9)+"px 'B612 Mono',monospace";ctx.textAlign='center';ctx.textBaseline='middle';
+  for(let deg=-30;deg<=30;deg+=2.5){
+    if(deg===0)continue;
+    const y=-deg*ppp;
+    const maj=deg%10===0,med=deg%5===0&&!maj;
+    const len=maj?s(48):med?s(28):s(13);
+    const lw=maj?s(1.5):med?s(1.2):s(0.8);
+    ctx.strokeStyle=C.white;ctx.lineWidth=lw;
+    ctx.beginPath();ctx.moveTo(-len,y);ctx.lineTo(len,y);ctx.stroke();
+    if(maj){ctx.fillStyle=C.white;ctx.fillText(Math.abs(deg),-len-s(13),y);ctx.fillText(Math.abs(deg),len+s(13),y);}
+  }
+  ctx.restore();
+  const arcR=s(AI_H/2-7);
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(1);ctx.beginPath();ctx.arc(0,0,arcR,-Math.PI*0.75,-Math.PI*0.25);ctx.stroke();
+  [-60,-45,-30,-20,-10,0,10,20,30,45,60].forEach(deg=>{
+    const a=(deg-90)*Math.PI/180,maj=Math.abs(deg)%30===0||deg===0,len=maj?s(7):s(4);
+    ctx.strokeStyle=C.white;ctx.lineWidth=maj?s(1.5):s(1);
+    ctx.beginPath();ctx.moveTo(arcR*Math.cos(a),arcR*Math.sin(a));ctx.lineTo((arcR-len)*Math.cos(a),(arcR-len)*Math.sin(a));ctx.stroke();
+  });
+  ctx.restore();
+  ctx.save();ctx.translate(cx,cy);
+  ctx.fillStyle=C.white;ctx.beginPath();ctx.moveTo(0,-arcR+s(2));ctx.lineTo(-s(5),-arcR+s(10));ctx.lineTo(s(5),-arcR+s(10));ctx.closePath();ctx.fill();
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(2.5);
+  ctx.beginPath();ctx.moveTo(-s(40),0);ctx.lineTo(-s(11),0);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(s(11),0);ctx.lineTo(s(40),0);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-s(40),0);ctx.lineTo(-s(40),s(7));ctx.stroke();
+  ctx.beginPath();ctx.moveTo(s(40),0);ctx.lineTo(s(40),s(7));ctx.stroke();
+  ctx.fillStyle=C.white;ctx.beginPath();ctx.arc(0,0,s(3.5),0,Math.PI*2);ctx.fill();
+  if(data.fd_active||data.ap_active){
+    ctx.strokeStyle=C.magenta;ctx.lineWidth=s(2);
+    ctx.beginPath();ctx.moveTo(-s(28),0);ctx.lineTo(s(28),0);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,-s(18));ctx.lineTo(0,s(18));ctx.stroke();
+  }
+  ctx.restore();
+  ctx.beginPath();ctx.roundRect(s(AI_X),s(AI_Y),w,h,r);ctx.strokeStyle='#333';ctx.lineWidth=s(1);ctx.stroke();
+  ctx.restore();
+}
+
+function drawSpeedTape(){
+  const x=SPD_X,y=SPD_Y,w=SPD_W,h=SPD_H;
+  fillR(x,y,w,h,C.tape_bg);
+  const ias=disp.ias,ppp=s(3.0),cy=s(y+h/2),tx=s(x+w);
+  ctx.save();ctx.beginPath();ctx.rect(s(x),s(y),s(w),s(h));ctx.clip();
+  for(let sp=Math.floor(ias-35);sp<=ias+35;sp++){
+    if(sp<0)continue;
+    const yp=cy-(sp-ias)*ppp;
+    if(yp<s(y)||yp>s(y+h))continue;
+    const maj=sp%10===0,med=sp%5===0;
+    if(!maj&&!med)continue;
+    const len=maj?s(9):s(5);
+    ctx.strokeStyle=C.tape_line;ctx.lineWidth=maj?s(1.5):s(1);
+    ctx.beginPath();ctx.moveTo(tx-len,yp);ctx.lineTo(tx,yp);ctx.stroke();
+    if(maj&&sp>0){ctx.font=s(10)+"px 'B612 Mono',monospace";ctx.fillStyle=C.white;ctx.textAlign='right';ctx.textBaseline='middle';ctx.fillText(sp,tx-s(12),yp);}
+  }
+  ctx.restore();
+  const bugY=cy-(data.ap_speed-ias)*ppp;
+  if(bugY>=s(y)&&bugY<=s(y+h)){ctx.strokeStyle=C.magenta;ctx.lineWidth=s(2);ctx.beginPath();ctx.moveTo(tx-s(12),bugY-s(5));ctx.lineTo(tx-s(2),bugY-s(5));ctx.lineTo(tx-s(2),bugY+s(5));ctx.lineTo(tx-s(12),bugY+s(5));ctx.stroke();}
+  ctx.font='bold '+s(15)+"px 'B612 Mono',monospace";ctx.fillStyle=C.magenta;ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(Math.round(disp.ap_speed),s(x+2),s(y+2));
+  const bh=s(20),by=cy-bh/2;
+  ctx.fillStyle=C.black;ctx.fillRect(s(x),by,s(SPD_BOX_W),bh);
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(1.2);ctx.strokeRect(s(x),by,s(SPD_BOX_W),bh);
+  ctx.fillStyle=C.black;ctx.beginPath();ctx.moveTo(s(x+SPD_BOX_W),cy-s(7));ctx.lineTo(s(x+SPD_BOX_W+7),cy);ctx.lineTo(s(x+SPD_BOX_W),cy+s(7));ctx.closePath();ctx.fill();
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(1);ctx.stroke();
+  ctx.font='bold '+s(16)+"px 'B612 Mono',monospace";ctx.fillStyle=C.white;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(Math.round(ias),s(x+SPD_BOX_W/2),cy);
+  txt('GS '+Math.round(data.gs),x+2,y+h-4,9,C.white,'left');
+}
+
+function drawAltTape(){
+  const x=ALT_X,y=ALT_Y,w=ALT_W,h=ALT_H;
+  fillR(x,y,w,h,C.tape_bg);
+  const alt=disp.altitude,ppf=s(0.075),cy=s(y+h/2),tx=s(x);
+  ctx.save();ctx.beginPath();ctx.rect(s(x),s(y),s(w),s(h));ctx.clip();
+  for(let a=Math.floor((alt-1400)/100)*100;a<=alt+1400;a+=100){
+    const yp=cy-(a-alt)*ppf;
+    if(yp<s(y)-5||yp>s(y+h)+5)continue;
+    const maj=a%500===0;
+    ctx.strokeStyle=C.tape_line;ctx.lineWidth=maj?s(1.5):s(1);
+    ctx.beginPath();ctx.moveTo(tx,yp);ctx.lineTo(tx+(maj?s(9):s(5)),yp);ctx.stroke();
+    if(maj){ctx.font=s(9)+"px 'B612 Mono',monospace";ctx.fillStyle=C.white;ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(a<0?'-'+Math.abs(a):a,tx+s(12),yp);}
+  }
+  ctx.restore();
+  const bugY=cy-(disp.ap_altitude-alt)*ppf;
+  if(bugY>=s(y)&&bugY<=s(y+h)){ctx.strokeStyle=C.magenta;ctx.lineWidth=s(2);ctx.beginPath();ctx.moveTo(tx+s(12),bugY-s(5));ctx.lineTo(tx+s(2),bugY-s(5));ctx.lineTo(tx+s(2),bugY+s(5));ctx.lineTo(tx+s(12),bugY+s(5));ctx.stroke();}
+  ctx.font='bold '+s(15)+"px 'B612 Mono',monospace";ctx.fillStyle=C.magenta;ctx.textAlign='right';ctx.textBaseline='top';ctx.fillText(Math.round(disp.ap_altitude),s(x+w-2),s(y+2));
+  const bh=s(20),by=cy-bh/2;
+  ctx.fillStyle=C.black;ctx.fillRect(s(x),by,s(ALT_BOX_W),bh);
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(1.2);ctx.strokeRect(s(x),by,s(ALT_BOX_W),bh);
+  ctx.fillStyle=C.black;ctx.beginPath();ctx.moveTo(s(x),cy-s(7));ctx.lineTo(s(x)-s(7),cy);ctx.lineTo(s(x),cy+s(7));ctx.closePath();ctx.fill();
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(1);ctx.stroke();
+  ctx.font='bold '+s(16)+"px 'B612 Mono',monospace";ctx.fillStyle=C.white;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(Math.round(alt),s(x+ALT_BOX_W/2),cy);
+  txt(Math.round(data.baro)+' HPA',x+w-2,y+h-4,8,C.green,'right');
+}
+
+function drawVS(){
+  const x=VS_X,y=VS_Y,w=VS_W,h=VS_H;
+  fillR(x,y,w,h,'#222');
+  const vs=disp.vs,maxVS=2000,cy=s(y+h/2),ppp=s(h/2/20);
+  [-2000,-1000,-500,500,1000,2000].forEach(v=>{
+    const yp=cy-(v/100)*ppp,maj=Math.abs(v)%1000===0;
+    ctx.strokeStyle=C.tape_line;ctx.lineWidth=s(1);ctx.beginPath();ctx.moveTo(s(x),yp);ctx.lineTo(s(x)+(maj?s(7):s(4)),yp);ctx.stroke();
+    if(maj){ctx.font=s(7)+"px 'B612 Mono',monospace";ctx.fillStyle=C.white;ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(Math.abs(v/1000),s(x)+s(9),yp);}
+  });
+  const vsY=cy-Math.max(-maxVS,Math.min(maxVS,vs))/100*ppp;
+  ctx.strokeStyle=C.white;ctx.lineWidth=s(2);ctx.beginPath();ctx.moveTo(s(x)+s(2),cy);ctx.lineTo(s(x)+s(2),vsY);ctx.stroke();
+  ln(x,y+h/2,x+w,y+h/2,'#555',0.5);
+}
+
+function drawHDG(){
+  const x=0,y=HDG_Y,w=REF_W,h=HDG_H;
+  fillR(x,y,w,h,'#1a1a1a');
+  const hdg=disp.heading,cx=s(REF_W/2),ty=s(y+8),ppd=s(w/80);
+  ctx.save();ctx.beginPath();ctx.rect(s(x),s(y),s(w),s(h));ctx.clip();
+  for(let o=-40;o<=40;o++){
+    const th=((Math.round(hdg)+o)%360+360)%360,px=cx+o*ppd;
+    const maj=th%10===0,med=th%5===0;
+    if(!maj&&!med)continue;
+    const len=maj?s(11):s(6);
+    ctx.strokeStyle=C.white;ctx.lineWidth=maj?s(1.5):s(1);ctx.beginPath();ctx.moveTo(px,ty);ctx.lineTo(px,ty+len);ctx.stroke();
+    if(maj){
+      let lbl;if(th===0||th===360)lbl='N';else if(th===90)lbl='E';else if(th===180)lbl='S';else if(th===270)lbl='W';else lbl=(th/10).toString().padStart(2,'0');
+      ctx.font=s(9)+"px 'B612 Mono',monospace";ctx.fillStyle=C.white;ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(lbl,px,ty+len+s(2));
+    }
+  }
+  const off=((disp.ap_heading-hdg+540)%360)-180;
+  if(Math.abs(off)<=40){
+    const bx=cx+off*ppd;ctx.fillStyle=C.magenta;ctx.beginPath();
+    ctx.moveTo(bx-s(5),ty-s(2));ctx.lineTo(bx+s(5),ty-s(2));ctx.lineTo(bx+s(5),ty+s(3));ctx.lineTo(bx+s(2),ty+s(9));ctx.lineTo(bx-s(2),ty+s(9));ctx.lineTo(bx-s(5),ty+s(3));ctx.closePath();ctx.fill();
+  }
+  ctx.restore();
+  ctx.fillStyle=C.white;ctx.beginPath();ctx.moveTo(cx-s(4),s(y));ctx.lineTo(cx+s(4),s(y));ctx.lineTo(cx,s(y+8));ctx.closePath();ctx.fill();
+  const hdgStr=Math.round(hdg).toString().padStart(3,'0');
+  txt(hdgStr+'°',REF_W/2,y+h-4,10,C.white,'center');
+  txt(Math.round(disp.ap_heading).toString().padStart(3,'0')+' H',8,y+h-4,9,C.magenta,'left');
+  txt('MAG',REF_W-6,y+h-4,9,C.green,'right');
+}
+
+function renderPFD(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  fillR(0,0,REF_W,REF_H,C.bg);
+  drawFMA();drawSpeedTape();drawAltTape();drawVS();drawAI();drawHDG();
+  if(!data.connected||!data.sim_running){
+    ctx.fillStyle='rgba(0,0,0,0.55)';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.font='bold '+s(14)+"px 'B612 Mono',monospace";ctx.fillStyle=C.amber;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('WAITING FOR SIM DATA',canvas.width/2,canvas.height/2);
+  }
+  pfdDirty=false;
+}
+
+function loop(){
+  updateDisp();
+  renderPFD();
+  requestAnimationFrame(loop);
+}
+
+const b612 = new FontFace('B612 Mono','url(https://fonts.gstatic.com/s/b612mono/v11/kmK_Zq85QVWbN1eW6lJl1w.woff2)');
+b612.load().then(f=>{document.fonts.add(f);loop();}).catch(()=>loop());
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Personal settings and secrets
+config.json
+auth_token.txt
+auth_token.txt.bak
+sessions.json
+
+# Runtime files
+logs/
+*.log
+bridge.pid
+
+# Build output and binaries
+__pycache__/
+build/
+dist/
+*.exe
+*.spec
+.wrangler/
+*.bak
+
+# Third-party logo (not redistributed)
+logo.png
